@@ -272,8 +272,9 @@ func runWeb(ctx *cli.Context) {
 		m.Post("/email", bindIgnErr(auth.AddEmailForm{}), user.SettingsEmailPost)
 		m.Get("/password", user.SettingsPassword)
 		m.Post("/password", bindIgnErr(auth.ChangePasswordForm{}), user.SettingsPasswordPost)
-		m.Get("/ssh", user.SettingsSSHKeys)
-		m.Post("/ssh", bindIgnErr(auth.AddSSHKeyForm{}), user.SettingsSSHKeysPost)
+		m.Combo("/ssh").Get(user.SettingsSSHKeys).
+			Post(bindIgnErr(auth.AddSSHKeyForm{}), user.SettingsSSHKeysPost)
+		m.Post("/ssh/delete", user.DeleteSSHKey)
 		m.Get("/social", user.SettingsSocial)
 		m.Combo("/applications").Get(user.SettingsApplications).
 			Post(bindIgnErr(auth.NewAccessTokenForm{}), user.SettingsApplicationsPost)
@@ -467,12 +468,17 @@ func runWeb(ctx *cli.Context) {
 
 			m.Combo("/:index/comments").Post(bindIgnErr(auth.CreateCommentForm{}), repo.NewComment)
 			m.Group("/:index", func() {
-				m.Post("", bindIgnErr(auth.CreateIssueForm{}), repo.UpdateIssue)
 				m.Post("/label", repo.UpdateIssueLabel)
 				m.Post("/milestone", repo.UpdateIssueMilestone)
 				m.Post("/assignee", repo.UpdateIssueAssignee)
 			}, reqRepoAdmin)
+
+			m.Group("/:index", func() {
+				m.Post("/title", repo.UpdateIssueTitle)
+				m.Post("/content", repo.UpdateIssueContent)
+			})
 		})
+		m.Post("/comments/:id", repo.UpdateCommentContent)
 		m.Group("/labels", func() {
 			m.Post("/new", bindIgnErr(auth.CreateLabelForm{}), repo.NewLabel)
 			m.Post("/edit", bindIgnErr(auth.CreateLabelForm{}), repo.UpdateLabel)
