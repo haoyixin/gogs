@@ -42,6 +42,7 @@ func (ls Ldapsource) FindUserDN(name, passwd string) (string, bool) {
 
 	log.Trace("Search for LDAP user: %s", name)
 	if ls.BindDN != "" {
+		var bd, bp string
 		if ls.BindPassword == "" {
 			bd = strings.Replace(ls.BindDN, "<username>", name, -1)
 			bp = passwd
