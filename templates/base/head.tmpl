@@ -3,8 +3,8 @@
 <head data-suburl="{{AppSubUrl}}">
 	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
 	<meta http-equiv="X-UA-Compatible" content="IE=edge"/>
-	<meta name="author" content="Gogs - Go Git Service" />
-	<meta name="description" content="Gogs(Go Git Service) a painless self-hosted Git Service written in Go" />
+	<meta name="author" content="QGS - Qiyi Git Service" />
+	<meta name="description" content="QGS(Qiyi Git Service) a painless self-hosted Git Service written in Go" />
 	<meta name="keywords" content="go, git, self-hosted, gogs">
 	<meta name="referrer" content="no-referrer" />
 	<meta name="_csrf" content="{{.CsrfToken}}" />
@@ -115,9 +115,6 @@
 											{{.i18n.Tr "your_settings"}}<!-- Your settings -->
 										</a>
 										<a class="item" target="_blank" href="http://gogs.io/docs" rel="noreferrer">
-											<i class="octicon icon octicon-question"></i>
-											{{.i18n.Tr "help"}}<!-- Help -->
-										</a>
 										{{if .IsAdmin}}
 										<div class="divider"></div>
 
@@ -138,7 +135,6 @@
 
 							{{else}}
 
-							<a class="item" target="_blank" href="http://gogs.io/docs" rel="noreferrer">{{.i18n.Tr "help"}}</a>
 							<div class="right menu">
 								{{if .ShowRegistrationButton}}
 								<a class="item{{if .PageIsSignUp}} active{{end}}" href="{{AppSubUrl}}/user/sign_up">
