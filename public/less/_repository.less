@@ -79,47 +79,6 @@
 	 	}
 	}
 
-	.page.buttons {
-		padding-top: 15px;
-	}
-
-	.issue.list {
-		list-style: none;
-		padding-top: 15px;
-		>.item {
-			padding-top: 15px;
-			padding-bottom: 10px;
-			border-bottom: 1px dashed #AAA;
-			.title {
-				color: #444;
-				font-size: 15px;
-				font-weight: bold;
-				margin: 0 6px;
-				&:hover {
-					color: #000;
-				}
-			}
-			.comment {
-				padding-right: 10px;
-				color: #666;
-			}
-			.desc {
-				padding-top: 5px;
-				color: #999;
-				a.milestone {
-					padding-left: 5px;
-					color: #999!important;
-					&:hover {
-						color: #000!important;
-					}
-				}
-				.assignee {
-					margin-top: -5px;
-					margin-right: 5px;
-				}
-			}
-		}
-	}
 	@comment-avatar-width: 3em;
 	&.new.issue {
 		.comment.form {
@@ -395,34 +354,6 @@
 
 	.filter.dropdown .menu {
 		margin-top: 1px!important;
-		.items {
-			max-height: 300px;
-			overflow-y: auto;
-			.item {
-				position: relative;
-				cursor: pointer;
-				display: block;
-				border: none;
-				height: auto;
-				border-top: none;
-				line-height: 1em;
-				color: rgba(0,0,0,.8);
-				padding: .71428571em 1.14285714em!important;
-				font-size: 1rem;
-				text-transform: none;
-				font-weight: 400;
-				box-shadow: none;
-				-webkit-touch-callout: none;
-				&.active {
-					font-weight: 700;
-				}
-				&:hover {
-			    background: rgba(0,0,0,.05);
-			    color: rgba(0,0,0,.8);
-			    z-index: 13;
-				}
-			}
-		}
 	}
 
 	&.commits {
@@ -607,6 +538,48 @@
 	}
 }
 
+.issue.list {
+	list-style: none;
+	padding-top: 15px;
+	>.item {
+		padding-top: 15px;
+		padding-bottom: 10px;
+		border-bottom: 1px dashed #AAA;
+		.title {
+			color: #444;
+			font-size: 15px;
+			font-weight: bold;
+			margin: 0 6px;
+			&:hover {
+				color: #000;
+			}
+		}
+		.comment {
+			padding-right: 10px;
+			color: #666;
+		}
+		.desc {
+			padding-top: 5px;
+			color: #999;
+			a.milestone {
+				padding-left: 5px;
+				color: #999!important;
+				&:hover {
+					color: #000!important;
+				}
+			}
+			.assignee {
+				margin-top: -5px;
+				margin-right: 5px;
+			}
+		}
+	}
+}
+
+.page.buttons {
+	padding-top: 15px;
+}
+
 .ui.comments {
 	.dropzone {
 		width: 100%; 
@@ -648,6 +621,18 @@
 		}
 		.activity {
 			color: #666;
+		}
+	}
+	.hook.list {
+		.item:not(:first-child) {
+			border-top: 1px solid #eaeaea;
+		}
+		.item {
+			padding: 10px 20px;
+			.octicon,
+			.fa {
+				width: 20px;
+			}
 		}
 	}
 }

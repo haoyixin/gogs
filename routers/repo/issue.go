@@ -79,11 +79,11 @@ func Issues(ctx *middleware.Context) {
 	filterMode := models.FM_ALL
 	switch viewType {
 	case "assigned":
-		assigneeID = ctx.User.Id
 		filterMode = models.FM_ASSIGN
+		assigneeID = ctx.User.Id
 	case "created_by":
-		posterID = ctx.User.Id
 		filterMode = models.FM_CREATE
+		posterID = ctx.User.Id
 	case "mentioned":
 		filterMode = models.FM_MENTION
 	}
@@ -97,7 +97,7 @@ func Issues(ctx *middleware.Context) {
 	selectLabels := ctx.Query("labels")
 	milestoneID := ctx.QueryInt64("milestone")
 	isShowClosed := ctx.Query("state") == "closed"
-	issueStats := models.GetIssueStats(repo.ID, uid, com.StrTo(selectLabels).MustInt64(), milestoneID, assigneeID, isShowClosed, filterMode)
+	issueStats := models.GetIssueStats(repo.ID, uid, com.StrTo(selectLabels).MustInt64(), milestoneID, assigneeID, filterMode)
 
 	page := ctx.QueryInt("page")
 	if page <= 1 {
@@ -114,7 +114,7 @@ func Issues(ctx *middleware.Context) {
 
 	// Get issues.
 	issues, err := models.Issues(uid, assigneeID, repo.ID, posterID, milestoneID,
-		page, isShowClosed, filterMode == models.FM_MENTION, selectLabels, sortType)
+		nil, page, isShowClosed, filterMode == models.FM_MENTION, selectLabels, sortType)
 	if err != nil {
 		ctx.Handle(500, "Issues: %v", err)
 		return
