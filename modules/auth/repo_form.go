@@ -17,13 +17,14 @@ import (
 //         \/        \/                   \/        \/                        \/       \/ \/
 
 type CreateRepoForm struct {
-	Uid         int64  `form:"uid" binding:"Required"`
-	RepoName    string `form:"repo_name" binding:"Required;AlphaDashDot;MaxSize(100)"`
-	Private     bool   `form:"private"`
-	Description string `form:"desc" binding:"MaxSize(255)"`
-	AutoInit    bool   `form:"auto_init"`
-	Gitignore   string `form:"gitignore"`
-	License     string `form:"license"`
+	Uid         int64  `binding:"Required"`
+	RepoName    string `binding:"Required;AlphaDashDot;MaxSize(100)"`
+	Private     bool
+	Description string `binding:"MaxSize(255)"`
+	AutoInit    bool
+	Gitignores  string
+	License     string
+	Readme      string
 }
 
 func (f *CreateRepoForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
@@ -34,9 +35,9 @@ type MigrateRepoForm struct {
 	CloneAddr    string `binding:"Required"`
 	AuthUsername string
 	AuthPassword string
+	Mirror       bool
 	Uid          int64  `binding:"Required"`
 	RepoName     string `binding:"Required;AlphaDashDot;MaxSize(100)"`
-	Mirror       bool
 	Private      bool
 	Description  string `binding:"MaxSize(255)"`
 }

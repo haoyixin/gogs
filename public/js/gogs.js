@@ -341,10 +341,6 @@ function initRepository() {
 
     // Diff
     if ($('.repository.diff').length > 0) {
-        $('.diff-detail-box .toggle.button').click(function () {
-            $($(this).data('target')).slideToggle(100);
-        })
-
         var $counter = $('.diff-counter');
         if ($counter.length < 1) {
             return;
@@ -406,6 +402,16 @@ $(document).ready(function () {
             }
         }
     });
+    $('.tabular.menu .item').tab();
+
+    $('.toggle.button').click(function () {
+        $($(this).data('target')).slideToggle(100);
+    });
+
+    // Highlight JS
+    if (typeof hljs != 'undefined') {
+        hljs.initHighlightingOnLoad();
+    }
 
     // Dropzone
     if ($('#dropzone').length > 0) {

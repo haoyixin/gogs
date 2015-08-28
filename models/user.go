@@ -69,6 +69,9 @@ type User struct {
 	Created     time.Time `xorm:"CREATED"`
 	Updated     time.Time `xorm:"UPDATED"`
 
+	// Remember visibility choice for convenience.
+	LastRepoVisibility bool
+
 	// Permissions.
 	IsActive     bool
 	IsAdmin      bool
@@ -163,15 +166,6 @@ func (u *User) AvatarLink() string {
 		return setting.AppSubUrl + "/avatar/" + u.Avatar
 	}
 	return setting.GravatarSource + u.Avatar
-}
-
-// DisplayName returns full name if it's not empty,
-// returns username otherwise.
-func (u *User) DisplayName() string {
-	if len(u.FullName) > 0 {
-		return u.FullName
-	}
-	return u.Name
 }
 
 // NewGitSig generates and returns the signature of given user.
@@ -300,12 +294,13 @@ func (u *User) GetOrganizations() error {
 	return nil
 }
 
-// GetFullNameFallback returns Full Name if set, otherwise username
-func (u *User) GetFullNameFallback() string {
-	if u.FullName == "" {
-		return u.Name
+// DisplayName returns full name if it's not empty,
+// returns username otherwise.
+func (u *User) DisplayName() string {
+	if len(u.FullName) > 0 {
+		return u.FullName
 	}
-	return u.FullName
+	return u.Name
 }
 
 // IsUserExist checks if given user name exist,
