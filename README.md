@@ -5,7 +5,7 @@ Gogs - Go Git Service [![Build Status](https://travis-ci.org/gogits/gogs.svg?bra
 
 Gogs (Go Git Service) is a painless self-hosted Git service.
 
-##### Current version: 0.6.6 Beta
+##### Current version: 0.6.9 Beta
 
 <table>
     <tr>
@@ -29,7 +29,7 @@ Gogs (Go Git Service) is a painless self-hosted Git service.
 
 - Due to testing purpose, data of [try.gogs.io](https://try.gogs.io) has been reset in **Jan 28, 2015** and will reset multiple times after. Please do **NOT** put your important data on the site.
 - The demo site [try.gogs.io](https://try.gogs.io) is running under `develop` branch.
-- You **MUST** read [CONTRIBUTING.md](CONTRIBUTING.md) before you start filing an issue or making a Pull Request, and **MUST** discuss with us on [Gitter](https://gitter.im/gogits/gogs) for UI changes and feature Pull Requests, otherwise it's high possibilities that we are not going to merge it.
+- :exclamation::exclamation::exclamation:<span style="color: red">You **MUST** read [CONTRIBUTING.md](CONTRIBUTING.md) before you start filing an issue or making a Pull Request, and **MUST** discuss with us on [Gitter](https://gitter.im/gogits/gogs) for UI changes and feature Pull Requests, otherwise it's high possibilities that we are not going to merge it.</span>:exclamation::exclamation::exclamation:
 - If you think there are vulnerabilities in the project, please talk privately to **u@gogs.io**. Thanks!
 
 #### Other language version
@@ -44,7 +44,7 @@ The goal of this project is to make the easiest, fastest, and most painless way 
 
 - Please see the [Documentation](http://gogs.io/docs/intro/) for project design, known issues, and change log.
 - See the [Trello Board](https://trello.com/b/uxAoeLUl/gogs-go-git-service) to follow the develop team.
-- Want to try it before doing anything else? Do it [online](https://try.gogs.io/unknwon/gogs) or go down to the **Installation -> Install from binary** section!
+- Want to try it before doing anything else? Do it [online](https://try.gogs.io/gogs/gogs) or go down to the **Installation -> Install from binary** section!
 - Having trouble? Get help with [Troubleshooting](http://gogs.io/docs/intro/troubleshooting.md).
 - Want to help with localization? Check out the [guide](http://gogs.io/docs/features/i18n.html)!
 
@@ -61,7 +61,6 @@ The goal of this project is to make the easiest, fastest, and most painless way 
 - Gravatar and custom source support
 - Mail service
 - Administration panel
-- Drone CI integration
 - Supports MySQL, PostgreSQL and SQLite3
 - Social account login (GitHub, Google, QQ, Weibo)
 - Multi-language support ([14 languages](https://crowdin.com/project/gogs))
@@ -73,15 +72,8 @@ The goal of this project is to make the easiest, fastest, and most painless way 
 
 ## Browser Support
 
-According to [Semantic UI](https://github.com/Semantic-Org/Semantic-UI):
-
-- Last 2 Versions FF, Chrome, IE 10+, Safari Mac
-- IE 10+
-- Android 4
-
-Some components will work in IE 9, but the browser is not officially supported.
-
-The official support minimal size  is **1024*768**, UI may still looks right in smaller size but no promises and fixes.
+- Please see [Semantic UI](https://github.com/Semantic-Org/Semantic-UI#browser-support) for specific versions of supported browsers.
+- The official support minimal size  is **1024*768**, UI may still looks right in smaller size but no promises and fixes.
 
 ## Installation
 
@@ -117,10 +109,9 @@ There are 5 ways to install Gogs:
 
 ## Contributors
 
-- The [core team](http://gogs.io/team) of this project.
 - Ex-team members [@lunny](https://github.com/lunny) and [@fuxiaohei](https://github.com/fuxiaohei).
 - See [contributors page](https://github.com/gogits/gogs/graphs/contributors) for full list of contributors.
-- See [TRANSLATORS](conf/locale/TRANSLATORS) for full list of translators.
+- See [TRANSLATORS](conf/locale/TRANSLATORS) for public list of translators.
 
 ## License
 

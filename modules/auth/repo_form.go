@@ -32,14 +32,14 @@ func (f *CreateRepoForm) Validate(ctx *macaron.Context, errs binding.Errors) bin
 }
 
 type MigrateRepoForm struct {
-	CloneAddr    string `binding:"Required"`
-	AuthUsername string
-	AuthPassword string
-	Mirror       bool
-	Uid          int64  `binding:"Required"`
-	RepoName     string `binding:"Required;AlphaDashDot;MaxSize(100)"`
-	Private      bool
-	Description  string `binding:"MaxSize(255)"`
+	CloneAddr    string `json:"clone_addr" binding:"Required"`
+	AuthUsername string `json:"auth_username"`
+	AuthPassword string `json:"auth_password"`
+	Uid          int64  `json:"uid" binding:"Required"`
+	RepoName     string `json:"repo_name" binding:"Required;AlphaDashDot;MaxSize(100)"`
+	Private      bool   `json:"mirror"`
+	Mirror       bool   `json:"private"`
+	Description  string `json:"description" binding:"MaxSize(255)"`
 }
 
 func (f *MigrateRepoForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
@@ -47,12 +47,12 @@ func (f *MigrateRepoForm) Validate(ctx *macaron.Context, errs binding.Errors) bi
 }
 
 type RepoSettingForm struct {
-	RepoName    string `form:"repo_name" binding:"Required;AlphaDashDot;MaxSize(100)"`
-	Description string `form:"desc" binding:"MaxSize(255)"`
-	Website     string `form:"site" binding:"Url;MaxSize(100)"`
-	Branch      string `form:"branch"`
-	Interval    int    `form:"interval"`
-	Private     bool   `form:"private"`
+	RepoName    string `binding:"Required;AlphaDashDot;MaxSize(100)"`
+	Description string `binding:"MaxSize(255)"`
+	Website     string `binding:"Url;MaxSize(100)"`
+	Branch      string
+	Interval    int
+	Private     bool
 }
 
 func (f *RepoSettingForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
@@ -67,8 +67,22 @@ func (f *RepoSettingForm) Validate(ctx *macaron.Context, errs binding.Errors) bi
 //        \/       \/    \/     \/     \/            \/
 
 type WebhookForm struct {
-	PushOnly bool
-	Active   bool
+	Events string
+	Create bool
+	Push   bool
+	Active bool
+}
+
+func (f WebhookForm) PushOnly() bool {
+	return f.Events == "push_only"
+}
+
+func (f WebhookForm) SendEverything() bool {
+	return f.Events == "send_everything"
+}
+
+func (f WebhookForm) ChooseEvents() bool {
+	return f.Events == "choose_events"
 }
 
 type NewWebhookForm struct {
@@ -83,8 +97,11 @@ func (f *NewWebhookForm) Validate(ctx *macaron.Context, errs binding.Errors) bin
 }
 
 type NewSlackHookForm struct {
-	PayloadURL string `binding:"Required`
+	PayloadURL string `binding:"Required;Url`
 	Channel    string `binding:"Required"`
+	Username   string
+	IconURL    string
+	Color      string
 	WebhookForm
 }
 

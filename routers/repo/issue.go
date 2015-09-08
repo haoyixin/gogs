@@ -55,8 +55,14 @@ func RetrieveLabels(ctx *middleware.Context) {
 }
 
 func Issues(ctx *middleware.Context) {
-	ctx.Data["Title"] = ctx.Tr("repo.issues")
-	ctx.Data["PageIsIssueList"] = true
+	isPullList := ctx.Params(":type") == "pulls"
+	if isPullList {
+		ctx.Data["Title"] = ctx.Tr("repo.pulls")
+		ctx.Data["PageIsPullList"] = true
+	} else {
+		ctx.Data["Title"] = ctx.Tr("repo.issues")
+		ctx.Data["PageIsIssueList"] = true
+	}
 
 	viewType := ctx.Query("type")
 	sortType := ctx.Query("sort")
@@ -97,7 +103,15 @@ func Issues(ctx *middleware.Context) {
 	selectLabels := ctx.Query("labels")
 	milestoneID := ctx.QueryInt64("milestone")
 	isShowClosed := ctx.Query("state") == "closed"
-	issueStats := models.GetIssueStats(repo.ID, uid, com.StrTo(selectLabels).MustInt64(), milestoneID, assigneeID, filterMode)
+	issueStats := models.GetIssueStats(&models.IssueStatsOptions{
+		RepoID:      repo.ID,
+		UserID:      uid,
+		LabelID:     com.StrTo(selectLabels).MustInt64(),
+		MilestoneID: milestoneID,
+		AssigneeID:  assigneeID,
+		FilterMode:  filterMode,
+		IsPull:      isPullList,
+	})
 
 	page := ctx.QueryInt("page")
 	if page <= 1 {
@@ -113,8 +127,19 @@ func Issues(ctx *middleware.Context) {
 	ctx.Data["Page"] = paginater.New(total, setting.IssuePagingNum, page, 5)
 
 	// Get issues.
-	issues, err := models.Issues(uid, assigneeID, repo.ID, posterID, milestoneID,
-		nil, page, isShowClosed, filterMode == models.FM_MENTION, selectLabels, sortType)
+	issues, err := models.Issues(&models.IssuesOptions{
+		UserID:      uid,
+		AssigneeID:  assigneeID,
+		RepoID:      repo.ID,
+		PosterID:    posterID,
+		MilestoneID: milestoneID,
+		Page:        page,
+		IsClosed:    isShowClosed,
+		IsMention:   filterMode == models.FM_MENTION,
+		IsPull:      isPullList,
+		Labels:      selectLabels,
+		SortType:    sortType,
+	})
 	if err != nil {
 		ctx.Handle(500, "Issues: %v", err)
 		return
@@ -185,118 +210,133 @@ func Issues(ctx *middleware.Context) {
 }
 
 func renderAttachmentSettings(ctx *middleware.Context) {
+	ctx.Data["RequireDropzone"] = true
 	ctx.Data["IsAttachmentEnabled"] = setting.AttachmentEnabled
 	ctx.Data["AttachmentAllowedTypes"] = setting.AttachmentAllowedTypes
+	ctx.Data["AttachmentMaxSize"] = setting.AttachmentMaxSize
 	ctx.Data["AttachmentMaxFiles"] = setting.AttachmentMaxFiles
+}
+
+func RetrieveRepoMilestonesAndAssignees(ctx *middleware.Context, repo *models.Repository) {
+	var err error
+	ctx.Data["OpenMilestones"], err = models.GetMilestones(repo.ID, -1, false)
+	if err != nil {
+		ctx.Handle(500, "GetMilestones: %v", err)
+		return
+	}
+	ctx.Data["ClosedMilestones"], err = models.GetMilestones(repo.ID, -1, true)
+	if err != nil {
+		ctx.Handle(500, "GetMilestones: %v", err)
+		return
+	}
+
+	ctx.Data["Assignees"], err = repo.GetAssignees()
+	if err != nil {
+		ctx.Handle(500, "GetAssignees: %v", err)
+		return
+	}
+}
+
+func RetrieveRepoMetas(ctx *middleware.Context, repo *models.Repository) []*models.Label {
+	if !ctx.Repo.IsAdmin() {
+		return nil
+	}
+
+	labels, err := models.GetLabelsByRepoID(repo.ID)
+	if err != nil {
+		ctx.Handle(500, "GetLabelsByRepoID: %v", err)
+		return nil
+	}
+	ctx.Data["Labels"] = labels
+
+	RetrieveRepoMilestonesAndAssignees(ctx, repo)
+	if ctx.Written() {
+		return nil
+	}
+
+	return labels
 }
 
 func NewIssue(ctx *middleware.Context) {
 	ctx.Data["Title"] = ctx.Tr("repo.issues.new")
 	ctx.Data["PageIsIssueList"] = true
-	ctx.Data["RequireDropzone"] = true
 	renderAttachmentSettings(ctx)
 
-	if ctx.Repo.IsAdmin() {
-		var (
-			repo = ctx.Repo.Repository
-			err  error
-		)
-		ctx.Data["Labels"], err = models.GetLabelsByRepoID(repo.ID)
-		if err != nil {
-			ctx.Handle(500, "GetLabelsByRepoID: %v", err)
-			return
-		}
-
-		ctx.Data["OpenMilestones"], err = models.GetMilestones(repo.ID, -1, false)
-		if err != nil {
-			ctx.Handle(500, "GetMilestones: %v", err)
-			return
-		}
-		ctx.Data["ClosedMilestones"], err = models.GetMilestones(repo.ID, -1, true)
-		if err != nil {
-			ctx.Handle(500, "GetMilestones: %v", err)
-			return
-		}
-
-		ctx.Data["Assignees"], err = repo.GetAssignees()
-		if err != nil {
-			ctx.Handle(500, "GetAssignees: %v", err)
-			return
-		}
+	RetrieveRepoMetas(ctx, ctx.Repo.Repository)
+	if ctx.Written() {
+		return
 	}
 
 	ctx.HTML(200, ISSUE_NEW)
 }
 
+func ValidateRepoMetas(ctx *middleware.Context, form auth.CreateIssueForm) ([]int64, int64, int64) {
+	var (
+		repo = ctx.Repo.Repository
+		err  error
+	)
+
+	labels := RetrieveRepoMetas(ctx, ctx.Repo.Repository)
+	if ctx.Written() {
+		return nil, 0, 0
+	}
+
+	if !ctx.Repo.IsAdmin() {
+		return nil, 0, 0
+	}
+
+	// Check labels.
+	labelIDs := base.StringsToInt64s(strings.Split(form.LabelIDs, ","))
+	labelIDMark := base.Int64sToMap(labelIDs)
+	hasSelected := false
+	for i := range labels {
+		if labelIDMark[labels[i].ID] {
+			labels[i].IsChecked = true
+			hasSelected = true
+		}
+	}
+	ctx.Data["HasSelectedLabel"] = hasSelected
+	ctx.Data["label_ids"] = form.LabelIDs
+	ctx.Data["Labels"] = labels
+
+	// Check milestone.
+	milestoneID := form.MilestoneID
+	if milestoneID > 0 {
+		ctx.Data["Milestone"], err = repo.GetMilestoneByID(milestoneID)
+		if err != nil {
+			ctx.Handle(500, "GetMilestoneByID: %v", err)
+			return nil, 0, 0
+		}
+		ctx.Data["milestone_id"] = milestoneID
+	}
+
+	// Check assignee.
+	assigneeID := form.AssigneeID
+	if assigneeID > 0 {
+		ctx.Data["Assignee"], err = repo.GetAssigneeByID(assigneeID)
+		if err != nil {
+			ctx.Handle(500, "GetAssigneeByID: %v", err)
+			return nil, 0, 0
+		}
+		ctx.Data["assignee_id"] = assigneeID
+	}
+
+	return labelIDs, milestoneID, assigneeID
+}
+
 func NewIssuePost(ctx *middleware.Context, form auth.CreateIssueForm) {
 	ctx.Data["Title"] = ctx.Tr("repo.issues.new")
 	ctx.Data["PageIsIssueList"] = true
-	ctx.Data["RequireDropzone"] = true
 	renderAttachmentSettings(ctx)
 
 	var (
 		repo        = ctx.Repo.Repository
-		labelIDs    []int64
-		milestoneID int64
-		assigneeID  int64
 		attachments []string
 	)
-	if ctx.Repo.IsAdmin() {
-		// Check labels.
-		labelIDs = base.StringsToInt64s(strings.Split(form.LabelIDs, ","))
-		labelIDMark := base.Int64sToMap(labelIDs)
-		labels, err := models.GetLabelsByRepoID(repo.ID)
-		if err != nil {
-			ctx.Handle(500, "GetLabelsByRepoID: %v", err)
-			return
-		}
-		hasSelected := false
-		for i := range labels {
-			if labelIDMark[labels[i].ID] {
-				labels[i].IsChecked = true
-				hasSelected = true
-			}
-		}
-		ctx.Data["HasSelectedLabel"] = hasSelected
-		ctx.Data["label_ids"] = form.LabelIDs
-		ctx.Data["Labels"] = labels
 
-		// Check milestone.
-		milestoneID = form.MilestoneID
-		if milestoneID > 0 {
-			ctx.Data["OpenMilestones"], err = models.GetMilestones(repo.ID, -1, false)
-			if err != nil {
-				ctx.Handle(500, "GetMilestones: %v", err)
-				return
-			}
-			ctx.Data["ClosedMilestones"], err = models.GetMilestones(repo.ID, -1, true)
-			if err != nil {
-				ctx.Handle(500, "GetMilestones: %v", err)
-				return
-			}
-			ctx.Data["Milestone"], err = repo.GetMilestoneByID(milestoneID)
-			if err != nil {
-				ctx.Handle(500, "GetMilestoneByID: %v", err)
-				return
-			}
-			ctx.Data["milestone_id"] = milestoneID
-		}
-
-		// Check assignee.
-		assigneeID = form.AssigneeID
-		if assigneeID > 0 {
-			ctx.Data["Assignees"], err = repo.GetAssignees()
-			if err != nil {
-				ctx.Handle(500, "GetAssignees: %v", err)
-				return
-			}
-			ctx.Data["Assignee"], err = repo.GetAssigneeByID(assigneeID)
-			if err != nil {
-				ctx.Handle(500, "GetAssigneeByID: %v", err)
-				return
-			}
-			ctx.Data["assignee_id"] = assigneeID
-		}
+	labelIDs, milestoneID, assigneeID := ValidateRepoMetas(ctx, form)
+	if ctx.Written() {
+		return
 	}
 
 	if setting.AttachmentEnabled {
@@ -310,7 +350,7 @@ func NewIssuePost(ctx *middleware.Context, form auth.CreateIssueForm) {
 
 	issue := &models.Issue{
 		RepoID:      ctx.Repo.Repository.ID,
-		Index:       int64(repo.NumIssues) + 1,
+		Index:       repo.NextIssueIndex(),
 		Name:        form.Title,
 		PosterID:    ctx.User.Id,
 		Poster:      ctx.User,
@@ -338,7 +378,7 @@ func NewIssuePost(ctx *middleware.Context, form auth.CreateIssueForm) {
 
 	// Mail watchers and mentions.
 	if setting.Service.EnableNotifyMail {
-		tos, err := mailer.SendIssueNotifyMail(ctx.User, ctx.Repo.Owner, ctx.Repo.Repository, issue)
+		tos, err := mailer.SendIssueNotifyMail(ctx.User, ctx.Repo.Owner, repo, issue)
 		if err != nil {
 			ctx.Handle(500, "SendIssueNotifyMail", err)
 			return
@@ -354,13 +394,13 @@ func NewIssuePost(ctx *middleware.Context, form auth.CreateIssueForm) {
 			newTos = append(newTos, m)
 		}
 		if err = mailer.SendIssueMentionMail(ctx.Render, ctx.User, ctx.Repo.Owner,
-			ctx.Repo.Repository, issue, models.GetUserEmailsByNames(newTos)); err != nil {
+			repo, issue, models.GetUserEmailsByNames(newTos)); err != nil {
 			ctx.Handle(500, "SendIssueMentionMail", err)
 			return
 		}
 	}
 
-	log.Trace("Issue created: %d/%d", ctx.Repo.Repository.ID, issue.ID)
+	log.Trace("Issue created: %d/%d", repo.ID, issue.ID)
 	ctx.Redirect(ctx.Repo.RepoLink + "/issues/" + com.ToStr(issue.Index))
 }
 
@@ -412,7 +452,6 @@ func UploadIssueAttachment(ctx *middleware.Context) {
 }
 
 func ViewIssue(ctx *middleware.Context) {
-	ctx.Data["PageIsIssueList"] = true
 	ctx.Data["RequireDropzone"] = true
 	renderAttachmentSettings(ctx)
 
@@ -427,6 +466,22 @@ func ViewIssue(ctx *middleware.Context) {
 	}
 	ctx.Data["Title"] = issue.Name
 
+	// Make sure type and URL matches.
+	if ctx.Params(":type") == "issues" && issue.IsPull {
+		ctx.Redirect(ctx.Repo.RepoLink + "/pulls/" + com.ToStr(issue.Index))
+		return
+	} else if ctx.Params(":type") == "pulls" && !issue.IsPull {
+		ctx.Redirect(ctx.Repo.RepoLink + "/issues/" + com.ToStr(issue.Index))
+		return
+	}
+
+	if issue.IsPull {
+		ctx.Data["PageIsPullList"] = true
+		ctx.Data["PageIsPullConversation"] = true
+	} else {
+		ctx.Data["PageIsIssueList"] = true
+	}
+
 	if err = issue.GetPoster(); err != nil {
 		ctx.Handle(500, "GetPoster", err)
 		return
@@ -434,6 +489,19 @@ func ViewIssue(ctx *middleware.Context) {
 	issue.RenderedContent = string(base.RenderMarkdown([]byte(issue.Content), ctx.Repo.RepoLink))
 
 	repo := ctx.Repo.Repository
+
+	// Get more information if it's a pull request.
+	if issue.IsPull {
+		if issue.HasMerged {
+			ctx.Data["DisableStatusChange"] = issue.HasMerged
+			PrepareMergedViewPullInfo(ctx, issue)
+		} else {
+			PrepareViewPullInfo(ctx, issue)
+		}
+		if ctx.Written() {
+			return
+		}
+	}
 
 	// Metas.
 	// Check labels.
@@ -462,20 +530,8 @@ func ViewIssue(ctx *middleware.Context) {
 
 	// Check milestone and assignee.
 	if ctx.Repo.IsAdmin() {
-		ctx.Data["OpenMilestones"], err = models.GetMilestones(repo.ID, -1, false)
-		if err != nil {
-			ctx.Handle(500, "GetMilestones: %v", err)
-			return
-		}
-		ctx.Data["ClosedMilestones"], err = models.GetMilestones(repo.ID, -1, true)
-		if err != nil {
-			ctx.Handle(500, "GetMilestones: %v", err)
-			return
-		}
-
-		ctx.Data["Assignees"], err = repo.GetAssignees()
-		if err != nil {
-			ctx.Handle(500, "GetAssignees: %v", err)
+		RetrieveRepoMilestonesAndAssignees(ctx, repo)
+		if ctx.Written() {
 			return
 		}
 	}
@@ -521,6 +577,7 @@ func ViewIssue(ctx *middleware.Context) {
 
 	ctx.Data["Issue"] = issue
 	ctx.Data["IsIssueOwner"] = ctx.Repo.IsAdmin() || (ctx.IsSigned && issue.IsPoster(ctx.User.Id))
+	ctx.Data["SignInLink"] = setting.AppSubUrl + "/user/login"
 	ctx.HTML(200, ISSUE_VIEW)
 }
 
@@ -704,7 +761,8 @@ func NewComment(ctx *middleware.Context, form auth.CreateCommentForm) {
 
 	// Check if issue owner/poster changes the status of issue.
 	if (ctx.Repo.IsOwner() || (ctx.IsSigned && issue.IsPoster(ctx.User.Id))) &&
-		(form.Status == "reopen" || form.Status == "close") {
+		(form.Status == "reopen" || form.Status == "close") &&
+		!(issue.IsPull && issue.HasMerged) {
 		issue.Repo = ctx.Repo.Repository
 		if err = issue.ChangeStatus(ctx.User, form.Status == "close"); err != nil {
 			ctx.Handle(500, "ChangeStatus", err)
@@ -1063,8 +1121,4 @@ func DeleteMilestone(ctx *middleware.Context) {
 	ctx.JSON(200, map[string]interface{}{
 		"redirect": ctx.Repo.RepoLink + "/milestones",
 	})
-}
-
-func PullRequest2(ctx *middleware.Context) {
-	ctx.HTML(200, "repo/pr2/list")
 }

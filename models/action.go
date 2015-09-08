@@ -16,6 +16,8 @@ import (
 
 	"github.com/go-xorm/xorm"
 
+	api "github.com/gogits/go-gogs-client"
+
 	"github.com/gogits/gogs/modules/base"
 	"github.com/gogits/gogs/modules/git"
 	"github.com/gogits/gogs/modules/log"
@@ -25,16 +27,17 @@ import (
 type ActionType int
 
 const (
-	CREATE_REPO   ActionType = iota + 1 // 1
-	DELETE_REPO                         // 2
-	STAR_REPO                           // 3
-	FOLLOW_REPO                         // 4
-	COMMIT_REPO                         // 5
-	CREATE_ISSUE                        // 6
-	PULL_REQUEST                        // 7
-	TRANSFER_REPO                       // 8
-	PUSH_TAG                            // 9
-	COMMENT_ISSUE                       // 10
+	CREATE_REPO         ActionType = iota + 1 // 1
+	RENAME_REPO                               // 2
+	STAR_REPO                                 // 3
+	FOLLOW_REPO                               // 4
+	COMMIT_REPO                               // 5
+	CREATE_ISSUE                              // 6
+	CREATE_PULL_REQUEST                       // 7
+	TRANSFER_REPO                             // 8
+	PUSH_TAG                                  // 9
+	COMMENT_ISSUE                             // 10
+	MERGE_PULL_REQUEST                        // 11
 )
 
 var (
@@ -133,14 +136,64 @@ func (a Action) GetIssueInfos() []string {
 	return strings.SplitN(a.Content, "|", 2)
 }
 
+func newRepoAction(e Engine, u *User, repo *Repository) (err error) {
+	if err = notifyWatchers(e, &Action{
+		ActUserID:    u.Id,
+		ActUserName:  u.Name,
+		ActEmail:     u.Email,
+		OpType:       CREATE_REPO,
+		RepoID:       repo.ID,
+		RepoUserName: repo.Owner.Name,
+		RepoName:     repo.Name,
+		IsPrivate:    repo.IsPrivate,
+	}); err != nil {
+		return fmt.Errorf("notify watchers '%d/%s': %v", u.Id, repo.ID, err)
+	}
+
+	log.Trace("action.newRepoAction: %s/%s", u.Name, repo.Name)
+	return err
+}
+
+// NewRepoAction adds new action for creating repository.
+func NewRepoAction(u *User, repo *Repository) (err error) {
+	return newRepoAction(x, u, repo)
+}
+
+func renameRepoAction(e Engine, actUser *User, oldRepoName string, repo *Repository) (err error) {
+	if err = notifyWatchers(e, &Action{
+		ActUserID:    actUser.Id,
+		ActUserName:  actUser.Name,
+		ActEmail:     actUser.Email,
+		OpType:       RENAME_REPO,
+		RepoID:       repo.ID,
+		RepoUserName: repo.Owner.Name,
+		RepoName:     repo.Name,
+		IsPrivate:    repo.IsPrivate,
+		Content:      oldRepoName,
+	}); err != nil {
+		return fmt.Errorf("notify watchers: %v", err)
+	}
+
+	log.Trace("action.renameRepoAction: %s/%s", actUser.Name, repo.Name)
+	return nil
+}
+
+// RenameRepoAction adds new action for renaming a repository.
+func RenameRepoAction(actUser *User, oldRepoName string, repo *Repository) error {
+	return renameRepoAction(x, actUser, oldRepoName, repo)
+}
+
+func issueIndexTrimRight(c rune) bool {
+	return !unicode.IsDigit(c)
+}
+
 // updateIssuesCommit checks if issues are manipulated by commit message.
 func updateIssuesCommit(u *User, repo *Repository, repoUserName, repoName string, commits []*base.PushCommit) error {
 	for _, c := range commits {
+		refMarked := make(map[int64]bool)
 		for _, ref := range IssueReferenceKeywordsPat.FindAllString(c.Message, -1) {
-			ref := ref[strings.IndexByte(ref, byte(' '))+1:]
-			ref = strings.TrimRightFunc(ref, func(c rune) bool {
-				return !unicode.IsDigit(c)
-			})
+			ref = ref[strings.IndexByte(ref, byte(' '))+1:]
+			ref = strings.TrimRightFunc(ref, issueIndexTrimRight)
 
 			if len(ref) == 0 {
 				continue
@@ -149,10 +202,9 @@ func updateIssuesCommit(u *User, repo *Repository, repoUserName, repoName string
 			// Add repo name if missing
 			if ref[0] == '#' {
 				ref = fmt.Sprintf("%s/%s%s", repoUserName, repoName, ref)
-			} else if strings.Contains(ref, "/") == false {
+			} else if !strings.Contains(ref, "/") {
 				// FIXME: We don't support User#ID syntax yet
 				// return ErrNotImplemented
-
 				continue
 			}
 
@@ -160,6 +212,11 @@ func updateIssuesCommit(u *User, repo *Repository, repoUserName, repoName string
 			if err != nil {
 				return err
 			}
+
+			if refMarked[issue.ID] {
+				continue
+			}
+			refMarked[issue.ID] = true
 
 			url := fmt.Sprintf("%s/%s/%s/commit/%s", setting.AppSubUrl, repoUserName, repoName, c.Sha1)
 			message := fmt.Sprintf(`<a href="%s">%s</a>`, url, c.Message)
@@ -168,11 +225,11 @@ func updateIssuesCommit(u *User, repo *Repository, repoUserName, repoName string
 			}
 		}
 
+		refMarked = make(map[int64]bool)
+		// FIXME: can merge this one and next one to a common function.
 		for _, ref := range IssueCloseKeywordsPat.FindAllString(c.Message, -1) {
-			ref := ref[strings.IndexByte(ref, byte(' '))+1:]
-			ref = strings.TrimRightFunc(ref, func(c rune) bool {
-				return !unicode.IsDigit(c)
-			})
+			ref = ref[strings.IndexByte(ref, byte(' '))+1:]
+			ref = strings.TrimRightFunc(ref, issueIndexTrimRight)
 
 			if len(ref) == 0 {
 				continue
@@ -181,10 +238,9 @@ func updateIssuesCommit(u *User, repo *Repository, repoUserName, repoName string
 			// Add repo name if missing
 			if ref[0] == '#' {
 				ref = fmt.Sprintf("%s/%s%s", repoUserName, repoName, ref)
-			} else if strings.Contains(ref, "/") == false {
+			} else if !strings.Contains(ref, "/") {
 				// We don't support User#ID syntax yet
 				// return ErrNotImplemented
-
 				continue
 			}
 
@@ -193,45 +249,24 @@ func updateIssuesCommit(u *User, repo *Repository, repoUserName, repoName string
 				return err
 			}
 
-			if issue.RepoID == repo.ID {
-				if issue.IsClosed {
-					continue
-				}
-				issue.IsClosed = true
+			if refMarked[issue.ID] {
+				continue
+			}
+			refMarked[issue.ID] = true
 
-				if err = issue.GetLabels(); err != nil {
-					return err
-				}
-				for _, label := range issue.Labels {
-					label.NumClosedIssues++
+			if issue.RepoID != repo.ID || issue.IsClosed {
+				continue
+			}
 
-					if err = UpdateLabel(label); err != nil {
-						return err
-					}
-				}
-
-				if err = UpdateIssue(issue); err != nil {
-					return err
-				} else if err = UpdateIssueUsersByStatus(issue.ID, issue.IsClosed); err != nil {
-					return err
-				}
-
-				if err = ChangeMilestoneIssueStats(issue); err != nil {
-					return err
-				}
-
-				// If commit happened in the referenced repository, it means the issue can be closed.
-				if _, err = CreateComment(u, repo, issue, 0, 0, COMMENT_TYPE_CLOSE, "", nil); err != nil {
-					return err
-				}
+			if err = issue.ChangeStatus(u, true); err != nil {
+				return err
 			}
 		}
 
+		// It is conflict to have close and reopen at same time, so refsMarkd doesn't need to reinit here.
 		for _, ref := range IssueReopenKeywordsPat.FindAllString(c.Message, -1) {
-			ref := ref[strings.IndexByte(ref, byte(' '))+1:]
-			ref = strings.TrimRightFunc(ref, func(c rune) bool {
-				return !unicode.IsDigit(c)
-			})
+			ref = ref[strings.IndexByte(ref, byte(' '))+1:]
+			ref = strings.TrimRightFunc(ref, issueIndexTrimRight)
 
 			if len(ref) == 0 {
 				continue
@@ -240,10 +275,9 @@ func updateIssuesCommit(u *User, repo *Repository, repoUserName, repoName string
 			// Add repo name if missing
 			if ref[0] == '#' {
 				ref = fmt.Sprintf("%s/%s%s", repoUserName, repoName, ref)
-			} else if strings.Contains(ref, "/") == false {
+			} else if !strings.Contains(ref, "/") {
 				// We don't support User#ID syntax yet
 				// return ErrNotImplemented
-
 				continue
 			}
 
@@ -252,37 +286,17 @@ func updateIssuesCommit(u *User, repo *Repository, repoUserName, repoName string
 				return err
 			}
 
-			if issue.RepoID == repo.ID {
-				if !issue.IsClosed {
-					continue
-				}
-				issue.IsClosed = false
+			if refMarked[issue.ID] {
+				continue
+			}
+			refMarked[issue.ID] = true
 
-				if err = issue.GetLabels(); err != nil {
-					return err
-				}
-				for _, label := range issue.Labels {
-					label.NumClosedIssues--
+			if issue.RepoID != repo.ID || !issue.IsClosed {
+				continue
+			}
 
-					if err = UpdateLabel(label); err != nil {
-						return err
-					}
-				}
-
-				if err = UpdateIssue(issue); err != nil {
-					return err
-				} else if err = UpdateIssueUsersByStatus(issue.ID, issue.IsClosed); err != nil {
-					return err
-				}
-
-				if err = ChangeMilestoneIssueStats(issue); err != nil {
-					return err
-				}
-
-				// If commit happened in the referenced repository, it means the issue can be closed.
-				if _, err = CreateComment(u, repo, issue, 0, 0, COMMENT_TYPE_REOPEN, "", nil); err != nil {
-					return err
-				}
+			if err = issue.ChangeStatus(u, false); err != nil {
+				return err
 			}
 		}
 	}
@@ -290,20 +304,50 @@ func updateIssuesCommit(u *User, repo *Repository, repoUserName, repoName string
 }
 
 // CommitRepoAction adds new action for committing repository.
-func CommitRepoAction(userID, repoUserID int64, userName, actEmail string,
-	repoID int64, repoUserName, repoName string, refFullName string, commit *base.PushCommits, oldCommitID string, newCommitID string) error {
+func CommitRepoAction(
+	userID, repoUserID int64,
+	userName, actEmail string,
+	repoID int64,
+	repoUserName, repoName string,
+	refFullName string,
+	commit *base.PushCommits,
+	oldCommitID string, newCommitID string) error {
 
+	u, err := GetUserByID(userID)
+	if err != nil {
+		return fmt.Errorf("GetUserByID: %v", err)
+	}
+
+	repo, err := GetRepositoryByName(repoUserID, repoName)
+	if err != nil {
+		return fmt.Errorf("GetRepositoryByName: %v", err)
+	} else if err = repo.GetOwner(); err != nil {
+		return fmt.Errorf("GetOwner: %v", err)
+	}
+
+	isNewBranch := false
 	opType := COMMIT_REPO
 	// Check it's tag push or branch.
 	if strings.HasPrefix(refFullName, "refs/tags/") {
 		opType = PUSH_TAG
 		commit = &base.PushCommits{}
-	}
+	} else {
+		// if not the first commit, set the compareUrl
+		if !strings.HasPrefix(oldCommitID, "0000000") {
+			commit.CompareUrl = fmt.Sprintf("%s/%s/compare/%s...%s", repoUserName, repoName, oldCommitID, newCommitID)
+		} else {
+			isNewBranch = true
+		}
 
-	repoLink := fmt.Sprintf("%s%s/%s", setting.AppUrl, repoUserName, repoName)
-	// if not the first commit, set the compareUrl
-	if !strings.HasPrefix(oldCommitID, "0000000") {
-		commit.CompareUrl = fmt.Sprintf("%s/%s/compare/%s...%s", repoUserName, repoName, oldCommitID, newCommitID)
+		// Change repository bare status and update last updated time.
+		repo.IsBare = false
+		if err = UpdateRepository(repo, false); err != nil {
+			return fmt.Errorf("UpdateRepository: %v", err)
+		}
+
+		if err = updateIssuesCommit(u, repo, repoUserName, repoName, commit.Commits); err != nil {
+			log.Debug("updateIssuesCommit: %v", err)
+		}
 	}
 
 	bs, err := json.Marshal(commit)
@@ -312,26 +356,6 @@ func CommitRepoAction(userID, repoUserID int64, userName, actEmail string,
 	}
 
 	refName := git.RefEndName(refFullName)
-
-	// Change repository bare status and update last updated time.
-	repo, err := GetRepositoryByName(repoUserID, repoName)
-	if err != nil {
-		return fmt.Errorf("GetRepositoryByName: %v", err)
-	}
-	repo.IsBare = false
-	if err = UpdateRepository(repo, false); err != nil {
-		return fmt.Errorf("UpdateRepository: %v", err)
-	}
-
-	u, err := GetUserByID(userID)
-	if err != nil {
-		return fmt.Errorf("GetUserByID: %v", err)
-	}
-
-	err = updateIssuesCommit(u, repo, repoUserName, repoName, commit.Commits)
-	if err != nil {
-		log.Debug("updateIssuesCommit: ", err)
-	}
 
 	if err = NotifyWatchers(&Action{
 		ActUserID:    u.Id,
@@ -345,32 +369,24 @@ func CommitRepoAction(userID, repoUserID int64, userName, actEmail string,
 		RefName:      refName,
 		IsPrivate:    repo.IsPrivate,
 	}); err != nil {
-		return errors.New("NotifyWatchers: " + err.Error())
+		return fmt.Errorf("NotifyWatchers: %v", err)
 
 	}
 
-	// New push event hook.
-	if err := repo.GetOwner(); err != nil {
-		return errors.New("GetOwner: " + err.Error())
-	}
-
-	ws, err := GetActiveWebhooksByRepoId(repo.ID)
-	if err != nil {
-		return errors.New("GetActiveWebhooksByRepoId: " + err.Error())
-	}
-
-	// check if repo belongs to org and append additional webhooks
-	if repo.Owner.IsOrganization() {
-		// get hooks for org
-		orgws, err := GetActiveWebhooksByOrgId(repo.OwnerID)
-		if err != nil {
-			return errors.New("GetActiveWebhooksByOrgId: " + err.Error())
-		}
-		ws = append(ws, orgws...)
-	}
-
-	if len(ws) == 0 {
-		return nil
+	repoLink := fmt.Sprintf("%s%s/%s", setting.AppUrl, repoUserName, repoName)
+	payloadRepo := &api.PayloadRepo{
+		ID:          repo.ID,
+		Name:        repo.LowerName,
+		URL:         repoLink,
+		Description: repo.Description,
+		Website:     repo.Website,
+		Watchers:    repo.NumWatches,
+		Owner: &api.PayloadAuthor{
+			Name:     repo.Owner.DisplayName(),
+			Email:    repo.Owner.Email,
+			UserName: repo.Owner.Name,
+		},
+		Private: repo.IsPrivate,
 	}
 
 	pusher_email, pusher_name := "", ""
@@ -379,113 +395,73 @@ func CommitRepoAction(userID, repoUserID int64, userName, actEmail string,
 		pusher_email = pusher.Email
 		pusher_name = pusher.DisplayName()
 	}
-
-	commits := make([]*PayloadCommit, len(commit.Commits))
-	for i, cmt := range commit.Commits {
-		author_username := ""
-		author, err := GetUserByEmail(cmt.AuthorEmail)
-		if err == nil {
-			author_username = author.Name
-		}
-		commits[i] = &PayloadCommit{
-			Id:      cmt.Sha1,
-			Message: cmt.Message,
-			Url:     fmt.Sprintf("%s/commit/%s", repoLink, cmt.Sha1),
-			Author: &PayloadAuthor{
-				Name:     cmt.AuthorName,
-				Email:    cmt.AuthorEmail,
-				UserName: author_username,
-			},
-		}
-	}
-	p := &Payload{
-		Ref:     refFullName,
-		Commits: commits,
-		Repo: &PayloadRepo{
-			Id:          repo.ID,
-			Name:        repo.LowerName,
-			Url:         repoLink,
-			Description: repo.Description,
-			Website:     repo.Website,
-			Watchers:    repo.NumWatches,
-			Owner: &PayloadAuthor{
-				Name:     repo.Owner.DisplayName(),
-				Email:    repo.Owner.Email,
-				UserName: repo.Owner.Name,
-			},
-			Private: repo.IsPrivate,
-		},
-		Pusher: &PayloadAuthor{
-			Name:     pusher_name,
-			Email:    pusher_email,
-			UserName: userName,
-		},
-		Before:     oldCommitID,
-		After:      newCommitID,
-		CompareUrl: setting.AppUrl + commit.CompareUrl,
+	payloadSender := &api.PayloadUser{
+		UserName:  pusher.Name,
+		ID:        pusher.Id,
+		AvatarUrl: setting.AppUrl + pusher.RelAvatarLink(),
 	}
 
-	for _, w := range ws {
-		w.GetEvent()
-		if !w.HasPushEvent() {
-			continue
-		}
-
-		var payload BasePayload
-		switch w.HookTaskType {
-		case SLACK:
-			s, err := GetSlackPayload(p, w.Meta)
-			if err != nil {
-				return errors.New("action.GetSlackPayload: " + err.Error())
+	switch opType {
+	case COMMIT_REPO: // Push
+		commits := make([]*api.PayloadCommit, len(commit.Commits))
+		for i, cmt := range commit.Commits {
+			author_username := ""
+			author, err := GetUserByEmail(cmt.AuthorEmail)
+			if err == nil {
+				author_username = author.Name
 			}
-			payload = s
-		default:
-			payload = p
-			p.Secret = w.Secret
+			commits[i] = &api.PayloadCommit{
+				ID:      cmt.Sha1,
+				Message: cmt.Message,
+				URL:     fmt.Sprintf("%s/commit/%s", repoLink, cmt.Sha1),
+				Author: &api.PayloadAuthor{
+					Name:     cmt.AuthorName,
+					Email:    cmt.AuthorEmail,
+					UserName: author_username,
+				},
+			}
+		}
+		p := &api.PushPayload{
+			Ref:        refFullName,
+			Before:     oldCommitID,
+			After:      newCommitID,
+			CompareUrl: setting.AppUrl + commit.CompareUrl,
+			Commits:    commits,
+			Repo:       payloadRepo,
+			Pusher: &api.PayloadAuthor{
+				Name:     pusher_name,
+				Email:    pusher_email,
+				UserName: userName,
+			},
+			Sender: payloadSender,
+		}
+		if err = PrepareWebhooks(repo, HOOK_EVENT_PUSH, p); err != nil {
+			return fmt.Errorf("PrepareWebhooks: %v", err)
 		}
 
-		if err = CreateHookTask(&HookTask{
-			RepoID:      repo.ID,
-			HookID:      w.ID,
-			Type:        w.HookTaskType,
-			URL:         w.URL,
-			BasePayload: payload,
-			ContentType: w.ContentType,
-			EventType:   HOOK_EVENT_PUSH,
-			IsSSL:       w.IsSSL,
-		}); err != nil {
-			return fmt.Errorf("CreateHookTask: %v", err)
+		if isNewBranch {
+			return PrepareWebhooks(repo, HOOK_EVENT_CREATE, &api.CreatePayload{
+				Ref:     refName,
+				RefType: "branch",
+				Repo:    payloadRepo,
+				Sender:  payloadSender,
+			})
 		}
+
+	case PUSH_TAG: // Create
+		return PrepareWebhooks(repo, HOOK_EVENT_CREATE, &api.CreatePayload{
+			Ref:     refName,
+			RefType: "tag",
+			Repo:    payloadRepo,
+			Sender:  payloadSender,
+		})
 	}
 
 	return nil
 }
 
-func newRepoAction(e Engine, u *User, repo *Repository) (err error) {
-	if err = notifyWatchers(e, &Action{
-		ActUserID:    u.Id,
-		ActUserName:  u.Name,
-		ActEmail:     u.Email,
-		OpType:       CREATE_REPO,
-		RepoID:       repo.ID,
-		RepoUserName: repo.Owner.Name,
-		RepoName:     repo.Name,
-		IsPrivate:    repo.IsPrivate,
-	}); err != nil {
-		return fmt.Errorf("notify watchers '%d/%s'", u.Id, repo.ID)
-	}
-
-	log.Trace("action.NewRepoAction: %s/%s", u.Name, repo.Name)
-	return err
-}
-
-// NewRepoAction adds new action for creating repository.
-func NewRepoAction(u *User, repo *Repository) (err error) {
-	return newRepoAction(x, u, repo)
-}
-
 func transferRepoAction(e Engine, actUser, oldOwner, newOwner *User, repo *Repository) (err error) {
-	action := &Action{
+	if err = notifyWatchers(e, &Action{
 		ActUserID:    actUser.Id,
 		ActUserName:  actUser.Name,
 		ActEmail:     actUser.Email,
@@ -495,9 +471,8 @@ func transferRepoAction(e Engine, actUser, oldOwner, newOwner *User, repo *Repos
 		RepoName:     repo.Name,
 		IsPrivate:    repo.IsPrivate,
 		Content:      path.Join(oldOwner.LowerName, repo.LowerName),
-	}
-	if err = notifyWatchers(e, action); err != nil {
-		return fmt.Errorf("notify watchers '%d/%s'", actUser.Id, repo.ID)
+	}); err != nil {
+		return fmt.Errorf("notify watchers '%d/%s': %v", actUser.Id, repo.ID, err)
 	}
 
 	// Remove watch for organization.
@@ -507,13 +482,32 @@ func transferRepoAction(e Engine, actUser, oldOwner, newOwner *User, repo *Repos
 		}
 	}
 
-	log.Trace("action.TransferRepoAction: %s/%s", actUser.Name, repo.Name)
+	log.Trace("action.transferRepoAction: %s/%s", actUser.Name, repo.Name)
 	return nil
 }
 
 // TransferRepoAction adds new action for transferring repository.
-func TransferRepoAction(actUser, oldOwner, newOwner *User, repo *Repository) (err error) {
+func TransferRepoAction(actUser, oldOwner, newOwner *User, repo *Repository) error {
 	return transferRepoAction(x, actUser, oldOwner, newOwner, repo)
+}
+
+func mergePullRequestAction(e Engine, actUser *User, repo *Repository, pull *Issue) error {
+	return notifyWatchers(e, &Action{
+		ActUserID:    actUser.Id,
+		ActUserName:  actUser.Name,
+		ActEmail:     actUser.Email,
+		OpType:       MERGE_PULL_REQUEST,
+		Content:      fmt.Sprintf("%d|%s", pull.Index, pull.Name),
+		RepoID:       repo.ID,
+		RepoUserName: repo.Owner.Name,
+		RepoName:     repo.Name,
+		IsPrivate:    repo.IsPrivate,
+	})
+}
+
+// MergePullRequestAction adds new action for merging pull request.
+func MergePullRequestAction(actUser *User, repo *Repository, pull *Issue) error {
+	return mergePullRequestAction(x, actUser, repo, pull)
 }
 
 // GetFeeds returns action list of given user in given context.

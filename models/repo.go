@@ -48,10 +48,6 @@ var (
 	Gitignores, Licenses, Readmes []string
 )
 
-var (
-	DescPattern = regexp.MustCompile(`https?://\S+`)
-)
-
 func LoadRepoConfig() {
 	// Load .gitignore and license files and readme templates.
 	types := []string{"gitignore", "license", "readme"}
@@ -171,6 +167,12 @@ type Repository struct {
 
 func (repo *Repository) AfterSet(colName string, _ xorm.Cell) {
 	switch colName {
+	case "num_closed_issues":
+		repo.NumOpenIssues = repo.NumIssues - repo.NumClosedIssues
+	case "num_closed_pulls":
+		repo.NumOpenPulls = repo.NumPulls - repo.NumClosedPulls
+	case "num_closed_milestones":
+		repo.NumOpenMilestones = repo.NumMilestones - repo.NumClosedMilestones
 	case "updated":
 		repo.Updated = regulateTimeZone(repo.Updated)
 	}
@@ -225,8 +227,8 @@ func (repo *Repository) GetMilestoneByID(milestoneID int64) (*Milestone, error) 
 }
 
 // IssueStats returns number of open and closed repository issues by given filter mode.
-func (repo *Repository) IssueStats(uid int64, filterMode int) (int64, int64) {
-	return GetRepoIssueStats(repo.ID, uid, filterMode)
+func (repo *Repository) IssueStats(uid int64, filterMode int, isPull bool) (int64, int64) {
+	return GetRepoIssueStats(repo.ID, uid, filterMode, isPull)
 }
 
 func (repo *Repository) GetMirror() (err error) {
@@ -243,11 +245,15 @@ func (repo *Repository) GetBaseRepo() (err error) {
 	return err
 }
 
-func (repo *Repository) RepoPath() (string, error) {
-	if err := repo.GetOwner(); err != nil {
+func (repo *Repository) repoPath(e Engine) (string, error) {
+	if err := repo.getOwner(e); err != nil {
 		return "", err
 	}
 	return RepoPath(repo.Owner.Name, repo.Name), nil
+}
+
+func (repo *Repository) RepoPath() (string, error) {
+	return repo.repoPath(x)
 }
 
 func (repo *Repository) RepoLink() (string, error) {
@@ -265,6 +271,19 @@ func (repo *Repository) HasAccess(u *User) bool {
 func (repo *Repository) IsOwnedBy(userID int64) bool {
 	return repo.OwnerID == userID
 }
+
+// CanBeForked returns true if repository meets the requirements of being forked.
+func (repo *Repository) CanBeForked() bool {
+	return !repo.IsBare && !repo.IsMirror
+}
+
+func (repo *Repository) NextIssueIndex() int64 {
+	return int64(repo.NumIssues+repo.NumPulls) + 1
+}
+
+var (
+	DescPattern = regexp.MustCompile(`https?://\S+`)
+)
 
 // DescriptionHtml does special handles to description and return HTML string.
 func (repo *Repository) DescriptionHtml() template.HTML {
@@ -451,6 +470,16 @@ func MigrateRepository(u *User, name, desc string, private, mirror bool, url str
 		return repo, fmt.Errorf("create update hook: %v", err)
 	}
 
+	// Check if repository is empty.
+	_, stderr, err = com.ExecCmdDir(repoPath, "git", "log", "-1")
+	if err != nil {
+		if strings.Contains(stderr, "fatal: bad default revision 'HEAD'") {
+			repo.IsBare = true
+		} else {
+			return repo, fmt.Errorf("check bare: %v - %s", err, stderr)
+		}
+	}
+
 	// Check if repository has master branch, if so set it to default branch.
 	gitRepo, err := git.OpenRepository(repoPath)
 	if err != nil {
@@ -469,20 +498,20 @@ func initRepoCommit(tmpPath string, sig *git.Signature) (err error) {
 	if _, stderr, err = process.ExecDir(-1,
 		tmpPath, fmt.Sprintf("initRepoCommit(git add): %s", tmpPath),
 		"git", "add", "--all"); err != nil {
-		return errors.New("git add: " + stderr)
+		return fmt.Errorf("git add: %s", stderr)
 	}
 
 	if _, stderr, err = process.ExecDir(-1,
 		tmpPath, fmt.Sprintf("initRepoCommit(git commit): %s", tmpPath),
 		"git", "commit", fmt.Sprintf("--author='%s <%s>'", sig.Name, sig.Email),
 		"-m", "initial commit"); err != nil {
-		return errors.New("git commit: " + stderr)
+		return fmt.Errorf("git commit: %s", stderr)
 	}
 
 	if _, stderr, err = process.ExecDir(-1,
 		tmpPath, fmt.Sprintf("initRepoCommit(git push): %s", tmpPath),
 		"git", "push", "origin", "master"); err != nil {
-		return errors.New("git push: " + stderr)
+		return fmt.Errorf("git push: %s", stderr)
 	}
 	return nil
 }
@@ -600,8 +629,8 @@ func initRepository(e Engine, repoPath string, u *User, repo *Repository, opts C
 		return err
 	}
 
-	tmpDir := filepath.Join(os.TempDir(), com.ToStr(time.Now().Nanosecond()))
-
+	tmpDir := filepath.Join(os.TempDir(), "gogs-"+repo.Name+"-"+com.ToStr(time.Now().Nanosecond()))
+	fmt.Println(tmpDir)
 	// Initialize repository according to user's choice.
 	if opts.AutoInit {
 		os.MkdirAll(tmpDir, os.ModePerm)
@@ -615,14 +644,16 @@ func initRepository(e Engine, repoPath string, u *User, repo *Repository, opts C
 		if err = initRepoCommit(tmpDir, u.NewGitSig()); err != nil {
 			return fmt.Errorf("initRepoCommit: %v", err)
 		}
-	} else {
-		repo.IsBare = true
 	}
 
 	// Re-fetch the repository from database before updating it (else it would
 	// override changes that were done earlier with sql)
 	if repo, err = getRepositoryByID(e, repo.ID); err != nil {
 		return fmt.Errorf("getRepositoryByID: %v", err)
+	}
+
+	if !opts.AutoInit {
+		repo.IsBare = true
 	}
 
 	repo.DefaultBranch = "master"
@@ -647,8 +678,13 @@ func createRepository(e *xorm.Session, u *User, repo *Repository) (err error) {
 
 	if _, err = e.Insert(repo); err != nil {
 		return err
-	} else if _, err = e.Exec("UPDATE `user` SET num_repos=num_repos+1 WHERE id=?", u.Id); err != nil {
-		return err
+	}
+
+	u.NumRepos++
+	// Remember visibility preference.
+	u.LastRepoVisibility = repo.IsPrivate
+	if err = updateUser(e, u); err != nil {
+		return fmt.Errorf("updateUser: %v", err)
 	}
 
 	// Give access to all members in owner team.
@@ -719,10 +755,25 @@ func CreateRepository(u *User, opts CreateRepoOptions) (_ *Repository, err error
 	return repo, sess.Commit()
 }
 
+func countRepositories(showPrivate bool) int64 {
+	sess := x.NewSession()
+
+	if !showPrivate {
+		sess.Where("is_private=", false)
+	}
+
+	count, _ := sess.Count(new(Repository))
+	return count
+}
+
 // CountRepositories returns number of repositories.
 func CountRepositories() int64 {
-	count, _ := x.Count(new(Repository))
-	return count
+	return countRepositories(true)
+}
+
+// CountPublicRepositories returns number of public repositories.
+func CountPublicRepositories() int64 {
+	return countRepositories(false)
 }
 
 // GetRepositoriesWithUsers returns given number of repository objects with offset.
@@ -876,6 +927,16 @@ func ChangeRepositoryName(u *User, oldRepoName, newRepoName string) (err error) 
 	return os.Rename(RepoPath(u.LowerName, oldRepoName), RepoPath(u.LowerName, newRepoName))
 }
 
+func getRepositoriesByForkID(e Engine, forkID int64) ([]*Repository, error) {
+	repos := make([]*Repository, 0, 10)
+	return repos, e.Where("fork_id=?", forkID).Find(&repos)
+}
+
+// GetRepositoriesByForkID returns all repositories with given fork ID.
+func GetRepositoriesByForkID(forkID int64) ([]*Repository, error) {
+	return getRepositoriesByForkID(x, forkID)
+}
+
 func updateRepository(e Engine, repo *Repository, visibilityChanged bool) (err error) {
 	repo.LowerName = strings.ToLower(repo.Name)
 
@@ -902,6 +963,17 @@ func updateRepository(e Engine, repo *Repository, visibilityChanged bool) (err e
 		if err = repo.recalculateTeamAccesses(e, 0); err != nil {
 			return fmt.Errorf("recalculateTeamAccesses: %v", err)
 		}
+
+		forkRepos, err := getRepositoriesByForkID(e, repo.ID)
+		if err != nil {
+			return fmt.Errorf("getRepositoriesByForkID: %v", err)
+		}
+		for i := range forkRepos {
+			forkRepos[i].IsPrivate = repo.IsPrivate
+			if err = updateRepository(e, forkRepos[i], true); err != nil {
+				return fmt.Errorf("updateRepository[%d]: %v", forkRepos[i].ID, err)
+			}
+		}
 	}
 
 	return nil
@@ -922,7 +994,7 @@ func UpdateRepository(repo *Repository, visibilityChanged bool) (err error) {
 }
 
 // DeleteRepository deletes a repository for a user or organization.
-func DeleteRepository(uid, repoID int64, userName string) error {
+func DeleteRepository(uid, repoID int64) error {
 	repo := &Repository{ID: repoID, OwnerID: uid}
 	has, err := x.Get(repo)
 	if err != nil {
@@ -976,6 +1048,8 @@ func DeleteRepository(uid, repoID int64, userName string) error {
 		return err
 	} else if _, err = sess.Delete(&Collaboration{RepoID: repoID}); err != nil {
 		return err
+	} else if _, err = sess.Delete(&PullRequest{BaseRepoID: repoID}); err != nil {
+		return err
 	}
 
 	// Delete comments and attachments.
@@ -1008,7 +1082,7 @@ func DeleteRepository(uid, repoID int64, userName string) error {
 
 	if repo.IsFork {
 		if _, err = sess.Exec("UPDATE `repository` SET num_forks=num_forks-1 WHERE id=?", repo.ForkID); err != nil {
-			return err
+			return fmt.Errorf("decrease fork count: %v", err)
 		}
 	}
 
@@ -1017,8 +1091,12 @@ func DeleteRepository(uid, repoID int64, userName string) error {
 	}
 
 	// Remove repository files.
-	if err = os.RemoveAll(RepoPath(userName, repo.Name)); err != nil {
-		desc := fmt.Sprintf("delete repository files(%s/%s): %v", userName, repo.Name, err)
+	repoPath, err := repo.repoPath(sess)
+	if err != nil {
+		return fmt.Errorf("RepoPath: %v", err)
+	}
+	if err = os.RemoveAll(repoPath); err != nil {
+		desc := fmt.Sprintf("delete repository files[%s]: %v", repoPath, err)
 		log.Warn(desc)
 		if err = CreateRepositoryNotice(desc); err != nil {
 			log.Error(4, "add notice: %v", err)
@@ -1032,22 +1110,41 @@ func DeleteRepository(uid, repoID int64, userName string) error {
 		}
 	}
 
-	return sess.Commit()
+	if err = sess.Commit(); err != nil {
+		return fmt.Errorf("Commit: %v", err)
+	}
+
+	if repo.NumForks > 0 {
+		if repo.IsPrivate {
+			forkRepos, err := GetRepositoriesByForkID(repo.ID)
+			if err != nil {
+				return fmt.Errorf("getRepositoriesByForkID: %v", err)
+			}
+			for i := range forkRepos {
+				if err = DeleteRepository(forkRepos[i].OwnerID, forkRepos[i].ID); err != nil {
+					log.Error(4, "updateRepository[%d]: %v", forkRepos[i].ID, err)
+				}
+			}
+		} else {
+			if _, err = x.Exec("UPDATE `repository` SET fork_id=0,is_fork=? WHERE fork_id=?", false, repo.ID); err != nil {
+				log.Error(4, "reset 'fork_id' and 'is_fork': %v", err)
+			}
+		}
+	}
+
+	return nil
 }
 
 // GetRepositoryByRef returns a Repository specified by a GFM reference.
 // See https://help.github.com/articles/writing-on-github#references for more information on the syntax.
 func GetRepositoryByRef(ref string) (*Repository, error) {
 	n := strings.IndexByte(ref, byte('/'))
-
 	if n < 2 {
 		return nil, ErrInvalidReference
 	}
 
 	userName, repoName := ref[:n], ref[n+1:]
-
 	user, err := GetUserByName(userName)
-
 	if err != nil {
 		return nil, err
 	}
@@ -1098,14 +1195,18 @@ func GetRepositories(uid int64, private bool) ([]*Repository, error) {
 }
 
 // GetRecentUpdatedRepositories returns the list of repositories that are recently updated.
-func GetRecentUpdatedRepositories(num int) (repos []*Repository, err error) {
-	err = x.Where("is_private=?", false).Limit(num).Desc("updated").Find(&repos)
-	return repos, err
+func GetRecentUpdatedRepositories(page int) (repos []*Repository, err error) {
+	return repos, x.Limit(setting.ExplorePagingNum, (page-1)*setting.ExplorePagingNum).
+		Where("is_private=?", false).Limit(setting.ExplorePagingNum).Desc("updated").Find(&repos)
+}
+
+func getRepositoryCount(e Engine, u *User) (int64, error) {
+	return x.Count(&Repository{OwnerID: u.Id})
 }
 
 // GetRepositoryCount returns the total number of repositories of user.
 func GetRepositoryCount(u *User) (int64, error) {
-	return x.Count(&Repository{OwnerID: u.Id})
+	return getRepositoryCount(x, u)
 }
 
 type SearchOption struct {
@@ -1268,6 +1369,27 @@ func GitGcRepos() error {
 		})
 }
 
+type repoChecker struct {
+	querySQL, correctSQL string
+	desc                 string
+}
+
+func repoStatsCheck(checker *repoChecker) {
+	results, err := x.Query(checker.querySQL)
+	if err != nil {
+		log.Error(4, "Select %s: %v", checker.desc, err)
+		return
+	}
+	for _, result := range results {
+		id := com.StrTo(result["id"]).MustInt64()
+		log.Trace("Updating %s: %d", checker.desc, id)
+		_, err = x.Exec(checker.correctSQL, id, id)
+		if err != nil {
+			log.Error(4, "Update %s[%d]: %v", checker.desc, id, err)
+		}
+	}
+}
+
 func CheckRepoStats() {
 	if isCheckingRepos {
 		return
@@ -1277,53 +1399,66 @@ func CheckRepoStats() {
 
 	log.Trace("Doing: CheckRepoStats")
 
-	// ***** START: Watch *****
-	results, err := x.Query("SELECT repo.id FROM `repository` repo WHERE repo.num_watches!=(SELECT COUNT(*) FROM `watch` WHERE repo_id=repo.id)")
-	if err != nil {
-		log.Error(4, "Select repository check 'watch': %v", err)
-		return
+	checkers := []*repoChecker{
+		// Repository.NumWatches
+		{
+			"SELECT repo.id FROM `repository` repo WHERE repo.num_watches!=(SELECT COUNT(*) FROM `watch` WHERE repo_id=repo.id)",
+			"UPDATE `repository` SET num_watches=(SELECT COUNT(*) FROM `watch` WHERE repo_id=?) WHERE id=?",
+			"repository count 'num_watches'",
+		},
+		// Repository.NumStars
+		{
+			"SELECT repo.id FROM `repository` repo WHERE repo.num_stars!=(SELECT COUNT(*) FROM `star` WHERE repo_id=repo.id)",
+			"UPDATE `repository` SET num_stars=(SELECT COUNT(*) FROM `star` WHERE repo_id=?) WHERE id=?",
+			"repository count 'num_stars'",
+		},
+		// Label.NumIssues
+		{
+			"SELECT label.id FROM `label` WHERE label.num_issues!=(SELECT COUNT(*) FROM `issue_label` WHERE label_id=label.id)",
+			"UPDATE `label` SET num_issues=(SELECT COUNT(*) FROM `issue_label` WHERE label_id=?) WHERE id=?",
+			"label count 'num_issues'",
+		},
+		// User.NumRepos
+		{
+			"SELECT `user`.id FROM `user` WHERE `user`.num_repos!=(SELECT COUNT(*) FROM `repository` WHERE owner_id=`user`.id)",
+			"UPDATE `user` SET num_repos=(SELECT COUNT(*) FROM `repository` WHERE owner_id=?) WHERE id=?",
+			"user count 'num_repos'",
+		},
 	}
-	for _, watch := range results {
-		repoID := com.StrTo(watch["id"]).MustInt64()
-		log.Trace("Updating repository count 'watch': %d", repoID)
-		_, err = x.Exec("UPDATE `repository` SET num_watches=(SELECT COUNT(*) FROM `watch` WHERE repo_id=?) WHERE id=?", repoID, repoID)
-		if err != nil {
-			log.Error(4, "Update repository check 'watch'[%d]: %v", repoID, err)
-		}
+	for i := range checkers {
+		repoStatsCheck(checkers[i])
 	}
-	// ***** END: Watch *****
 
-	// ***** START: Star *****
-	results, err = x.Query("SELECT repo.id FROM `repository` repo WHERE repo.num_stars!=(SELECT COUNT(*) FROM `star` WHERE repo_id=repo.id)")
+	// FIXME: use checker when v0.8, stop supporting old fork repo format.
+	// ***** START: Repository.NumForks *****
+	results, err := x.Query("SELECT repo.id FROM `repository` repo WHERE repo.num_forks!=(SELECT COUNT(*) FROM `repository` WHERE fork_id=repo.id)")
 	if err != nil {
-		log.Error(4, "Select repository check 'star': %v", err)
-		return
-	}
-	for _, star := range results {
-		repoID := com.StrTo(star["id"]).MustInt64()
-		log.Trace("Updating repository count 'star': %d", repoID)
-		_, err = x.Exec("UPDATE `repository` SET num_stars=(SELECT COUNT(*) FROM `star` WHERE repo_id=?) WHERE id=?", repoID, repoID)
-		if err != nil {
-			log.Error(4, "Update repository check 'star'[%d]: %v", repoID, err)
-		}
-	}
-	// ***** END: Star *****
+		log.Error(4, "Select repository count 'num_forks': %v", err)
+	} else {
+		for _, result := range results {
+			id := com.StrTo(result["id"]).MustInt64()
+			log.Trace("Updating repository count 'num_forks': %d", id)
 
-	// ***** START: Label *****
-	results, err = x.Query("SELECT label.id FROM `label` WHERE label.num_issues!=(SELECT COUNT(*) FROM `issue_label` WHERE label_id=label.id)")
-	if err != nil {
-		log.Error(4, "Select label check 'num_issues': %v", err)
-		return
-	}
-	for _, label := range results {
-		labelID := com.StrTo(label["id"]).MustInt64()
-		log.Trace("Updating label count 'num_issues': %d", labelID)
-		_, err = x.Exec("UPDATE `label` SET num_issues=(SELECT COUNT(*) FROM `issue_label` WHERE label_id=?) WHERE id=?", labelID, labelID)
-		if err != nil {
-			log.Error(4, "Update label check 'num_issues'[%d]: %v", labelID, err)
+			repo, err := GetRepositoryByID(id)
+			if err != nil {
+				log.Error(4, "GetRepositoryByID[%d]: %v", id, err)
+				continue
+			}
+
+			rawResult, err := x.Query("SELECT COUNT(*) FROM `repository` WHERE fork_id=?", repo.ID)
+			if err != nil {
+				log.Error(4, "Select count of forks[%d]: %v", repo.ID, err)
+				continue
+			}
+			repo.NumForks = int(parseCountResult(rawResult))
+
+			if err = UpdateRepository(repo, false); err != nil {
+				log.Error(4, "UpdateRepository[%d]: %v", id, err)
+				continue
+			}
 		}
 	}
-	// ***** END: Label *****
+	// ***** END: Repository.NumForks *****
 }
 
 // _________        .__  .__        ___.                        __  .__
@@ -1575,14 +1710,15 @@ func HasForkedRepo(ownerID, repoID int64) (*Repository, bool) {
 
 func ForkRepository(u *User, oldRepo *Repository, name, desc string) (_ *Repository, err error) {
 	repo := &Repository{
-		OwnerID:     u.Id,
-		Owner:       u,
-		Name:        name,
-		LowerName:   strings.ToLower(name),
-		Description: desc,
-		IsPrivate:   oldRepo.IsPrivate,
-		IsFork:      true,
-		ForkID:      oldRepo.ID,
+		OwnerID:       u.Id,
+		Owner:         u,
+		Name:          name,
+		LowerName:     strings.ToLower(name),
+		Description:   desc,
+		DefaultBranch: oldRepo.DefaultBranch,
+		IsPrivate:     oldRepo.IsPrivate,
+		IsFork:        true,
+		ForkID:        oldRepo.ID,
 	}
 
 	sess := x.NewSession()

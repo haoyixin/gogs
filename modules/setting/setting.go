@@ -91,7 +91,13 @@ var (
 	AnsiCharset  string
 
 	// UI settings.
-	IssuePagingNum int
+	ExplorePagingNum int
+	IssuePagingNum   int
+
+	// Markdown sttings.
+	Markdown struct {
+		EnableHardLineBreak bool
+	}
 
 	// Picture settings.
 	PictureService   string
@@ -195,6 +201,11 @@ func ExecPath() (string, error) {
 
 // WorkDir returns absolute path of work directory.
 func WorkDir() (string, error) {
+	wd := os.Getenv("GOGS_WORK_DIR")
+	if len(wd) > 0 {
+		return wd, nil
+	}
+
 	execPath, err := ExecPath()
 	if err != nil {
 		return execPath, err
@@ -304,7 +315,7 @@ func NewConfigContext() {
 		AttachmentPath = path.Join(workDir, AttachmentPath)
 	}
 	AttachmentAllowedTypes = strings.Replace(sec.Key("ALLOWED_TYPES").MustString("image/jpeg,image/png"), "|", ",", -1)
-	AttachmentMaxSize = sec.Key("MAX_SIZE").MustInt64(32)
+	AttachmentMaxSize = sec.Key("MAX_SIZE").MustInt64(4)
 	AttachmentMaxFiles = sec.Key("MAX_FILES").MustInt(5)
 	AttachmentEnabled = sec.Key("ENABLE").MustBool(true)
 
@@ -352,7 +363,9 @@ func NewConfigContext() {
 	AnsiCharset = sec.Key("ANSI_CHARSET").MustString("")
 
 	// UI settings.
-	IssuePagingNum = Cfg.Section("ui").Key("ISSUE_PAGING_NUM").MustInt(10)
+	sec = Cfg.Section("ui")
+	ExplorePagingNum = sec.Key("EXPLORE_PAGING_NUM").MustInt(20)
+	IssuePagingNum = sec.Key("ISSUE_PAGING_NUM").MustInt(10)
 
 	sec = Cfg.Section("picture")
 	PictureService = sec.Key("SERVICE").In("server", []string{"server"})
@@ -374,7 +387,9 @@ func NewConfigContext() {
 		DisableGravatar = true
 	}
 
-	if err = Cfg.Section("git").MapTo(&Git); err != nil {
+	if err = Cfg.Section("markdown").MapTo(&Markdown); err != nil {
+		log.Fatal(4, "Fail to map Markdown settings: %v", err)
+	} else if err = Cfg.Section("git").MapTo(&Git); err != nil {
 		log.Fatal(4, "Fail to map Git settings: %v", err)
 	} else if Cfg.Section("cron").MapTo(&Cron); err != nil {
 		log.Fatal(4, "Fail to map Cron settings: %v", err)

@@ -28,11 +28,12 @@ const (
 )
 
 func checkContextUser(ctx *middleware.Context, uid int64) *models.User {
-	if err := ctx.User.GetOrganizations(); err != nil {
-		ctx.Handle(500, "GetOrganizations", err)
+	orgs, err := models.GetOwnedOrgsByUserIDDesc(ctx.User.Id, "updated")
+	if err != nil {
+		ctx.Handle(500, "GetOwnedOrgsByUserIDDesc", err)
 		return nil
 	}
-	ctx.Data["Orgs"] = ctx.User.Orgs
+	ctx.Data["Orgs"] = orgs
 
 	// Not equal means current user is an organization.
 	if uid == ctx.User.Id || uid == 0 {
@@ -120,17 +121,13 @@ func CreatePost(ctx *middleware.Context, form auth.CreateRepoForm) {
 		AutoInit:    form.AutoInit,
 	})
 	if err == nil {
-		// Remember visibility preference.
-		ctx.User.LastRepoVisibility = repo.IsPrivate
-		models.UpdateUser(ctx.User)
-
 		log.Trace("Repository created: %s/%s", ctxUser.Name, repo.Name)
 		ctx.Redirect(setting.AppSubUrl + "/" + ctxUser.Name + "/" + repo.Name)
 		return
 	}
 
 	if repo != nil {
-		if errDelete := models.DeleteRepository(ctxUser.Id, repo.ID, ctxUser.Name); errDelete != nil {
+		if errDelete := models.DeleteRepository(ctxUser.Id, repo.ID); errDelete != nil {
 			log.Error(4, "DeleteRepository: %v", errDelete)
 		}
 	}
@@ -190,23 +187,20 @@ func MigratePost(ctx *middleware.Context, form auth.MigrateRepoForm) {
 
 	repo, err := models.MigrateRepository(ctxUser, form.RepoName, form.Description, form.Private, form.Mirror, remoteAddr)
 	if err == nil {
-		// Remember visibility preference.
-		ctx.User.LastRepoVisibility = repo.IsPrivate
-		models.UpdateUser(ctx.User)
-
 		log.Trace("Repository migrated: %s/%s", ctxUser.Name, form.RepoName)
 		ctx.Redirect(setting.AppSubUrl + "/" + ctxUser.Name + "/" + form.RepoName)
 		return
 	}
 
 	if repo != nil {
-		if errDelete := models.DeleteRepository(ctxUser.Id, repo.ID, ctxUser.Name); errDelete != nil {
+		if errDelete := models.DeleteRepository(ctxUser.Id, repo.ID); errDelete != nil {
 			log.Error(4, "DeleteRepository: %v", errDelete)
 		}
 	}
 
 	if strings.Contains(err.Error(), "Authentication failed") ||
-		strings.Contains(err.Error(), " not found") {
+		strings.Contains(err.Error(), " not found") ||
+		strings.Contains(err.Error(), "could not read Username") {
 		ctx.Data["Err_Auth"] = true
 		ctx.RenderWithErr(ctx.Tr("form.auth_failed", strings.Replace(err.Error(), ":"+form.AuthPassword+"@", ":<password>@", 1)), MIGRATE, &form)
 		return

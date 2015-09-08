@@ -26,7 +26,7 @@
 		.fork-flag {
 			margin-left: @mega-octicon-width + 8px;
 			display: block;
-			font-size: 11px;
+			font-size: 12px;
 			line-height: 10px;
 			white-space: nowrap;
 		}
@@ -77,6 +77,21 @@
 	 		margin: 1px;
 	 		padding-right: 0;
 	 	}
+	}
+	
+	&.options {
+		#interval {
+			width: 100px!important;
+			min-width: 100px;
+		}
+		.danger {
+			.item {
+				padding: 20px 15px;
+			}
+			.ui.divider {
+				margin: 0;
+			}
+		}
 	}
 
 	@comment-avatar-width: 3em;
@@ -131,6 +146,32 @@
 			}
 			.edit-zone {
 		    margin-top: 10px;
+			}
+		}
+		.pull-desc {
+			code {
+				color: #0166E6;
+			}
+		}
+		.pull {
+			&.tabular.menu {
+				margin-bottom: 10px;
+				.octicon {
+					margin-right: 5px;
+				}
+			}
+			&.tab.segment {
+				border: none;
+		    padding: 0;
+		    padding-top: 10px;
+		    box-shadow: none;
+		    background-color: inherit;
+			}
+			.merge.box {
+				.avatar {
+					margin-left: 10px;
+					margin-top: 10px;
+				}
 			}
 		}
 		.comment-list {
@@ -232,8 +273,22 @@
 		    		color: #bd2c00;
 		    	}
 		    	&.octicon-primitive-dot {
-		    		font-size: 35px;
+		    		font-size: 30px;
 		    		color: #6cc644;
+		    	}
+		    	&.octicon-bookmark {
+		    		margin-top: 3px;
+		    		font-size: 25px;
+		    	}
+		    }
+		    .detail {
+		    	font-size: 0.9rem;
+		    	margin-top: 5px;
+		    	margin-left: 35px;
+		    	.octicon {
+		    		&.octicon-git-commit {
+		    			margin-top: 2px;
+		    		}
 		    	}
 		    }
 			}
@@ -717,5 +772,12 @@
 				height: 15px;
 			}
 		}
+	}
+}
+
+#transfer-repo-modal,
+#delete-repo-modal {
+	.ui.message {
+		width: 100%!important;
 	}
 }

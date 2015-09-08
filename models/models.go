@@ -7,6 +7,7 @@ package models
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"path"
 	"strings"
@@ -71,6 +72,7 @@ var (
 	}
 
 	EnableSQLite3 bool
+	EnableTidb    bool
 )
 
 func init() {
@@ -78,7 +80,7 @@ func init() {
 		new(User), new(PublicKey), new(Oauth2), new(AccessToken),
 		new(Repository), new(DeployKey), new(Collaboration), new(Access),
 		new(Watch), new(Star), new(Follow), new(Action),
-		new(Issue), new(Comment), new(Attachment), new(IssueUser),
+		new(Issue), new(PullRequest), new(Comment), new(Attachment), new(IssueUser),
 		new(Label), new(IssueLabel), new(Milestone),
 		new(Mirror), new(Release), new(LoginSource), new(Webhook),
 		new(UpdateTask), new(HookTask),
@@ -133,7 +135,7 @@ func getEngine() (*xorm.Engine, error) {
 			port = fields[1]
 		}
 		cnnstr = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
-			DbCfg.User, DbCfg.Passwd, host, port, DbCfg.Name, DbCfg.SSLMode)
+			url.QueryEscape(DbCfg.User), url.QueryEscape(DbCfg.Passwd), host, port, DbCfg.Name, DbCfg.SSLMode)
 	case "sqlite3":
 		if !EnableSQLite3 {
 			return nil, fmt.Errorf("Unknown database type: %s", DbCfg.Type)
@@ -142,6 +144,14 @@ func getEngine() (*xorm.Engine, error) {
 			return nil, fmt.Errorf("Fail to create directories: %v", err)
 		}
 		cnnstr = "file:" + DbCfg.Path + "?cache=shared&mode=rwc"
+	case "tidb":
+		if !EnableTidb {
+			return nil, fmt.Errorf("Unknown database type: %s", DbCfg.Type)
+		}
+		if err := os.MkdirAll(path.Dir(DbCfg.Path), os.ModePerm); err != nil {
+			return nil, fmt.Errorf("Fail to create directories: %v", err)
+		}
+		cnnstr = "goleveldb://" + DbCfg.Path
 	default:
 		return nil, fmt.Errorf("Unknown database type: %s", DbCfg.Type)
 	}
@@ -155,7 +165,7 @@ func NewTestEngine(x *xorm.Engine) (err error) {
 	}
 
 	x.SetMapper(core.GonicMapper{})
-	return x.Sync(tables...)
+	return x.StoreEngine("InnoDB").Sync2(tables...)
 }
 
 func SetEngine() (err error) {

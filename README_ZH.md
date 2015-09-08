@@ -11,7 +11,7 @@ Gogs 的目标是打造一个最简单、最快速和最轻松的方式搭建自
 
 - 有关项目设计、已知问题和变更日志，请通过 [使用手册](http://gogs.io/docs/intro/) 查看。
 - 您可以到 [Trello Board](https://trello.com/b/uxAoeLUl/gogs-go-git-service) 跟随开发团队的脚步。
-- 想要先睹为快？通过 [在线体验](https://try.gogs.io/unknwon/gogs) 或查看 **安装部署 -> 二进制安装** 小节。
+- 想要先睹为快？通过 [在线体验](https://try.gogs.io/gogs/gogs) 或查看 **安装部署 -> 二进制安装** 小节。
 - 使用过程中遇到问题？尝试从 [故障排查](http://gogs.io/docs/intro/troubleshooting.md) 页面获取帮助。
 - 希望帮助多国语言界面的翻译吗？请立即访问 [详情页面](http://gogs.io/docs/features/i18n.html)！
 
@@ -28,7 +28,6 @@ Gogs 的目标是打造一个最简单、最快速和最轻松的方式搭建自
 - 支持 Gravatar 以及自定义源
 - 支持邮件服务
 - 支持后台管理面板
-- 支持 Drone CI 持续部署集成
 - 支持 MySQL、PostgreSQL 以及 SQLite3 数据库
 - 支持社交帐号登录（GitHub、Google、QQ、微博）
 - 支持多语言本地化（[14 种语言]([more](https://crowdin.com/project/gogs))）
@@ -40,15 +39,8 @@ Gogs 的目标是打造一个最简单、最快速和最轻松的方式搭建自
 
 ## 浏览器支持
 
-根据 [Semantic UI](https://github.com/Semantic-Org/Semantic-UI) 的要求：
-
-- 最新两版的 FF、Chrome、IE 10+ 和 Safari Mac
-- IE 10+
-- Android 4
-
-尽管一些组件可以在 IE 9 下使用，但该版本的浏览器被没有被正式支持。
-
-官方支持的最小 UI 尺寸为 **1024*768**，UI 不一定会在更小尺寸的设备上被破坏，但我们无法保证且不会修复。
+- 请根据 [Semantic UI](https://github.com/Semantic-Org/Semantic-UI#browser-support) 查看具体支持的浏览器版本。
+- 官方支持的最小 UI 尺寸为 **1024*768**，UI 不一定会在更小尺寸的设备上被破坏，但我们无法保证且不会修复。
 
 ## 安装部署
 
@@ -72,10 +64,9 @@ Gogs 的目标是打造一个最简单、最快速和最轻松的方式搭建自
 
 ## 贡献成员
 
-- 本项目的 [开发团队](http://gogs.io/team)。
 - 前团队成员 [@lunny](https://github.com/lunny) 和 [@fuxiaohei](https://github.com/fuxiaohei)。
 - 您可以通过查看 [贡献者页面](https://github.com/gogits/gogs/graphs/contributors) 获取完整的贡献者列表。
-- 您可以通过查看 [TRANSLATORS](conf/locale/TRANSLATORS) 文件获取完整的翻译人员列表。
+- 您可以通过查看 [TRANSLATORS](conf/locale/TRANSLATORS) 文件获取公开的翻译人员列表。
 
 ## 授权许可
 

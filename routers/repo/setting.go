@@ -44,6 +44,8 @@ func SettingsPost(ctx *middleware.Context, form auth.RepoSettingForm) {
 	ctx.Data["Title"] = ctx.Tr("repo.settings")
 	ctx.Data["PageIsSettingsOptions"] = true
 
+	repo := ctx.Repo.Repository
+
 	switch ctx.Query("action") {
 	case "update":
 		if ctx.HasError() {
@@ -51,46 +53,53 @@ func SettingsPost(ctx *middleware.Context, form auth.RepoSettingForm) {
 			return
 		}
 
+		isNameChanged := false
+		oldRepoName := repo.Name
 		newRepoName := form.RepoName
 		// Check if repository name has been changed.
-		if ctx.Repo.Repository.Name != newRepoName {
-			if err := models.ChangeRepositoryName(ctx.Repo.Owner, ctx.Repo.Repository.Name, newRepoName); err != nil {
+		if repo.LowerName != strings.ToLower(newRepoName) {
+			isNameChanged = true
+			if err := models.ChangeRepositoryName(ctx.Repo.Owner, repo.Name, newRepoName); err != nil {
+				ctx.Data["Err_RepoName"] = true
 				switch {
 				case models.IsErrRepoAlreadyExist(err):
-					ctx.Data["Err_RepoName"] = true
 					ctx.RenderWithErr(ctx.Tr("form.repo_name_been_taken"), SETTINGS_OPTIONS, &form)
 				case models.IsErrNameReserved(err):
-					ctx.Data["Err_RepoName"] = true
 					ctx.RenderWithErr(ctx.Tr("repo.form.name_reserved", err.(models.ErrNameReserved).Name), SETTINGS_OPTIONS, &form)
 				case models.IsErrNamePatternNotAllowed(err):
-					ctx.Data["Err_RepoName"] = true
 					ctx.RenderWithErr(ctx.Tr("repo.form.name_pattern_not_allowed", err.(models.ErrNamePatternNotAllowed).Pattern), SETTINGS_OPTIONS, &form)
 				default:
 					ctx.Handle(500, "ChangeRepositoryName", err)
 				}
 				return
 			}
-			log.Trace("Repository name changed: %s/%s -> %s", ctx.Repo.Owner.Name, ctx.Repo.Repository.Name, newRepoName)
-			ctx.Repo.Repository.Name = newRepoName
-			ctx.Repo.Repository.LowerName = strings.ToLower(newRepoName)
-		}
 
-		br := form.Branch
-
-		if ctx.Repo.GitRepo.IsBranchExist(br) {
-			ctx.Repo.Repository.DefaultBranch = br
+			log.Trace("Repository name changed: %s/%s -> %s", ctx.Repo.Owner.Name, repo.Name, newRepoName)
 		}
-		ctx.Repo.Repository.Description = form.Description
-		ctx.Repo.Repository.Website = form.Website
-		visibilityChanged := ctx.Repo.Repository.IsPrivate != form.Private
-		ctx.Repo.Repository.IsPrivate = form.Private
-		if err := models.UpdateRepository(ctx.Repo.Repository, visibilityChanged); err != nil {
-			ctx.Handle(404, "UpdateRepository", err)
+		// In case it's just a case change.
+		repo.Name = newRepoName
+		repo.LowerName = strings.ToLower(newRepoName)
+
+		if ctx.Repo.GitRepo.IsBranchExist(form.Branch) {
+			repo.DefaultBranch = form.Branch
+		}
+		repo.Description = form.Description
+		repo.Website = form.Website
+		visibilityChanged := repo.IsPrivate != form.Private
+		repo.IsPrivate = form.Private
+		if err := models.UpdateRepository(repo, visibilityChanged); err != nil {
+			ctx.Handle(500, "UpdateRepository", err)
 			return
 		}
-		log.Trace("Repository updated: %s/%s", ctx.Repo.Owner.Name, ctx.Repo.Repository.Name)
+		log.Trace("Repository updated: %s/%s", ctx.Repo.Owner.Name, repo.Name)
 
-		if ctx.Repo.Repository.IsMirror {
+		if isNameChanged {
+			if err := models.RenameRepoAction(ctx.User, oldRepoName, repo); err != nil {
+				log.Error(4, "RenameRepoAction: %v", err)
+			}
+		}
+
+		if repo.IsMirror {
 			if form.Interval > 0 {
 				ctx.Repo.Mirror.Interval = form.Interval
 				ctx.Repo.Mirror.NextUpdate = time.Now().Add(time.Duration(form.Interval) * time.Hour)
@@ -101,11 +110,18 @@ func SettingsPost(ctx *middleware.Context, form auth.RepoSettingForm) {
 		}
 
 		ctx.Flash.Success(ctx.Tr("repo.settings.update_settings_success"))
-		ctx.Redirect(fmt.Sprintf("%s/%s/%s/settings", setting.AppSubUrl, ctx.Repo.Owner.Name, ctx.Repo.Repository.Name))
+		ctx.Redirect(fmt.Sprintf("%s/%s/%s/settings", setting.AppSubUrl, ctx.Repo.Owner.Name, repo.Name))
 	case "transfer":
-		if ctx.Repo.Repository.Name != form.RepoName {
+		if repo.Name != form.RepoName {
 			ctx.RenderWithErr(ctx.Tr("form.enterred_invalid_repo_name"), SETTINGS_OPTIONS, nil)
 			return
+		}
+
+		if ctx.Repo.Owner.IsOrganization() {
+			if !ctx.Repo.Owner.IsOwnedBy(ctx.User.Id) {
+				ctx.Error(404)
+				return
+			}
 		}
 
 		newOwner := ctx.Query("new_owner_name")
@@ -118,16 +134,7 @@ func SettingsPost(ctx *middleware.Context, form auth.RepoSettingForm) {
 			return
 		}
 
-		if _, err = models.UserSignIn(ctx.User.Name, ctx.Query("password")); err != nil {
-			if models.IsErrUserNotExist(err) {
-				ctx.RenderWithErr(ctx.Tr("form.enterred_invalid_password"), SETTINGS_OPTIONS, nil)
-			} else {
-				ctx.Handle(500, "UserSignIn", err)
-			}
-			return
-		}
-
-		if err = models.TransferOwnership(ctx.User, newOwner, ctx.Repo.Repository); err != nil {
+		if err = models.TransferOwnership(ctx.User, newOwner, repo); err != nil {
 			if models.IsErrRepoAlreadyExist(err) {
 				ctx.RenderWithErr(ctx.Tr("repo.settings.new_owner_has_same_repo"), SETTINGS_OPTIONS, nil)
 			} else {
@@ -135,11 +142,11 @@ func SettingsPost(ctx *middleware.Context, form auth.RepoSettingForm) {
 			}
 			return
 		}
-		log.Trace("Repository transfered: %s/%s -> %s", ctx.Repo.Owner.Name, ctx.Repo.Repository.Name, newOwner)
+		log.Trace("Repository transfered: %s/%s -> %s", ctx.Repo.Owner.Name, repo.Name, newOwner)
 		ctx.Flash.Success(ctx.Tr("repo.settings.transfer_succeed"))
-		ctx.Redirect(setting.AppSubUrl + "/")
+		ctx.Redirect(setting.AppSubUrl + "/" + newOwner + "/" + repo.Name)
 	case "delete":
-		if ctx.Repo.Repository.Name != form.RepoName {
+		if repo.Name != form.RepoName {
 			ctx.RenderWithErr(ctx.Tr("form.enterred_invalid_repo_name"), SETTINGS_OPTIONS, nil)
 			return
 		}
@@ -151,25 +158,12 @@ func SettingsPost(ctx *middleware.Context, form auth.RepoSettingForm) {
 			}
 		}
 
-		if _, err := models.UserSignIn(ctx.User.Name, ctx.Query("password")); err != nil {
-			if models.IsErrUserNotExist(err) {
-				ctx.RenderWithErr(ctx.Tr("form.enterred_invalid_password"), SETTINGS_OPTIONS, nil)
-			} else {
-				ctx.Handle(500, "UserSignIn", err)
-			}
-			return
-		}
-
-		if err := models.DeleteRepository(ctx.Repo.Owner.Id, ctx.Repo.Repository.ID, ctx.Repo.Owner.Name); err != nil {
+		if err := models.DeleteRepository(ctx.Repo.Owner.Id, repo.ID); err != nil {
 			ctx.Handle(500, "DeleteRepository", err)
 			return
 		}
-		log.Trace("Repository deleted: %s/%s", ctx.Repo.Owner.Name, ctx.Repo.Repository.Name)
-		if ctx.Repo.Owner.IsOrganization() {
-			ctx.Redirect(setting.AppSubUrl + "/org/" + ctx.Repo.Owner.Name + "/dashboard")
-		} else {
-			ctx.Redirect(setting.AppSubUrl + "/")
-		}
+		log.Trace("Repository deleted: %s/%s", ctx.Repo.Owner.Name, repo.Name)
+		ctx.Redirect(ctx.Repo.Owner.DashboardLink())
 	}
 }
 
@@ -320,6 +314,18 @@ func WebhooksNew(ctx *middleware.Context) {
 	ctx.HTML(200, orCtx.NewTemplate)
 }
 
+func ParseHookEvent(form auth.WebhookForm) *models.HookEvent {
+	return &models.HookEvent{
+		PushOnly:       form.PushOnly(),
+		SendEverything: form.SendEverything(),
+		ChooseEvents:   form.ChooseEvents(),
+		HookEvents: models.HookEvents{
+			Create: form.Create,
+			Push:   form.Push,
+		},
+	}
+}
+
 func WebHooksNewPost(ctx *middleware.Context, form auth.NewWebhookForm) {
 	ctx.Data["Title"] = ctx.Tr("repo.settings.add_webhook")
 	ctx.Data["PageIsSettingsHooks"] = true
@@ -345,13 +351,11 @@ func WebHooksNewPost(ctx *middleware.Context, form auth.NewWebhookForm) {
 	}
 
 	w := &models.Webhook{
-		RepoID:      orCtx.RepoID,
-		URL:         form.PayloadURL,
-		ContentType: contentType,
-		Secret:      form.Secret,
-		HookEvent: &models.HookEvent{
-			PushOnly: form.PushOnly,
-		},
+		RepoID:       orCtx.RepoID,
+		URL:          form.PayloadURL,
+		ContentType:  contentType,
+		Secret:       form.Secret,
+		HookEvent:    ParseHookEvent(form.WebhookForm),
 		IsActive:     form.Active,
 		HookTaskType: models.GOGS,
 		OrgID:        orCtx.OrgID,
@@ -385,8 +389,11 @@ func SlackHooksNewPost(ctx *middleware.Context, form auth.NewSlackHookForm) {
 		return
 	}
 
-	meta, err := json.Marshal(&models.Slack{
-		Channel: form.Channel,
+	meta, err := json.Marshal(&models.SlackMeta{
+		Channel:  form.Channel,
+		Username: form.Username,
+		IconURL:  form.IconURL,
+		Color:    form.Color,
 	})
 	if err != nil {
 		ctx.Handle(500, "Marshal", err)
@@ -394,12 +401,10 @@ func SlackHooksNewPost(ctx *middleware.Context, form auth.NewSlackHookForm) {
 	}
 
 	w := &models.Webhook{
-		RepoID:      orCtx.RepoID,
-		URL:         form.PayloadURL,
-		ContentType: models.JSON,
-		HookEvent: &models.HookEvent{
-			PushOnly: form.PushOnly,
-		},
+		RepoID:       orCtx.RepoID,
+		URL:          form.PayloadURL,
+		ContentType:  models.JSON,
+		HookEvent:    ParseHookEvent(form.WebhookForm),
 		IsActive:     form.Active,
 		HookTaskType: models.SLACK,
 		Meta:         string(meta),
@@ -444,7 +449,6 @@ func checkWebhook(ctx *middleware.Context) (*OrgRepoCtx, *models.Webhook) {
 	default:
 		ctx.Data["HookType"] = "gogs"
 	}
-	w.GetEvent()
 
 	ctx.Data["History"], err = w.History(1)
 	if err != nil {
@@ -491,9 +495,7 @@ func WebHooksEditPost(ctx *middleware.Context, form auth.NewWebhookForm) {
 	w.URL = form.PayloadURL
 	w.ContentType = contentType
 	w.Secret = form.Secret
-	w.HookEvent = &models.HookEvent{
-		PushOnly: form.PushOnly,
-	}
+	w.HookEvent = ParseHookEvent(form.WebhookForm)
 	w.IsActive = form.Active
 	if err := w.UpdateEvent(); err != nil {
 		ctx.Handle(500, "UpdateEvent", err)
@@ -523,8 +525,11 @@ func SlackHooksEditPost(ctx *middleware.Context, form auth.NewSlackHookForm) {
 		return
 	}
 
-	meta, err := json.Marshal(&models.Slack{
-		Channel: form.Channel,
+	meta, err := json.Marshal(&models.SlackMeta{
+		Channel:  form.Channel,
+		Username: form.Username,
+		IconURL:  form.IconURL,
+		Color:    form.Color,
 	})
 	if err != nil {
 		ctx.Handle(500, "Marshal", err)
@@ -533,9 +538,7 @@ func SlackHooksEditPost(ctx *middleware.Context, form auth.NewSlackHookForm) {
 
 	w.URL = form.PayloadURL
 	w.Meta = string(meta)
-	w.HookEvent = &models.HookEvent{
-		PushOnly: form.PushOnly,
-	}
+	w.HookEvent = ParseHookEvent(form.WebhookForm)
 	w.IsActive = form.Active
 	if err := w.UpdateEvent(); err != nil {
 		ctx.Handle(500, "UpdateEvent", err)

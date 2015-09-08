@@ -83,7 +83,7 @@ func checkVersion() {
 		{"github.com/go-xorm/xorm", func() string { return xorm.Version }, "0.4.3.0806"},
 		{"github.com/Unknwon/macaron", macaron.Version, "0.5.4"},
 		{"github.com/macaron-contrib/binding", binding.Version, "0.1.0"},
-		{"github.com/macaron-contrib/cache", cache.Version, "0.0.7"},
+		{"github.com/macaron-contrib/cache", cache.Version, "0.1.2"},
 		{"github.com/macaron-contrib/csrf", csrf.Version, "0.0.3"},
 		{"github.com/macaron-contrib/i18n", i18n.Version, "0.0.7"},
 		{"github.com/macaron-contrib/session", session.Version, "0.1.6"},
@@ -198,13 +198,9 @@ func runWeb(ctx *cli.Context) {
 	// Routers.
 	m.Get("/", ignSignIn, routers.Home)
 	m.Get("/explore", ignSignIn, routers.Explore)
-	m.Combo("/install", routers.InstallInit).
-		Get(routers.Install).
+	m.Combo("/install", routers.InstallInit).Get(routers.Install).
 		Post(bindIgnErr(auth.InstallForm{}), routers.InstallPost)
-	m.Group("", func() {
-		m.Get("/pulls", user.Pulls)
-		m.Get("/issues", user.Issues)
-	}, reqSignIn)
+	m.Get("/:type(issues|pulls)", reqSignIn, user.Issues)
 
 	// ***** START: API *****
 	// FIXME: custom form error response.
@@ -233,16 +229,19 @@ func runWeb(ctx *cli.Context) {
 				Post(bind(api.CreateRepoOption{}), v1.CreateRepo)
 			m.Post("/org/:org/repos", middleware.ApiReqToken(), bind(api.CreateRepoOption{}), v1.CreateOrgRepo)
 
-			// TODO: https://github.com/gogits/go-gogs-client/wiki
 			m.Group("/repos", func() {
 				m.Get("/search", v1.SearchRepos)
-				m.Post("/migrate", bindIgnErr(auth.MigrateRepoForm{}), v1.MigrateRepo)
+
+				m.Group("", func() {
+					m.Post("/migrate", bindIgnErr(auth.MigrateRepoForm{}), v1.MigrateRepo)
+				}, middleware.ApiReqToken())
 
 				m.Group("/:username/:reponame", func() {
 					m.Combo("/hooks").Get(v1.ListRepoHooks).
 						Post(bind(api.CreateHookOption{}), v1.CreateRepoHook)
 					m.Patch("/hooks/:id:int", bind(api.EditHookOption{}), v1.EditRepoHook)
 					m.Get("/raw/*", middleware.RepoRef(), v1.GetRepoRawFile)
+					m.Get("/archive/*", v1.GetRepoArchive)
 				}, middleware.ApiRepoAssignment(), middleware.ApiReqToken())
 			})
 
@@ -386,7 +385,7 @@ func runWeb(ctx *cli.Context) {
 
 		m.Group("/:org", func() {
 			m.Get("/dashboard", user.Dashboard)
-			m.Get("/issues", user.Issues)
+			m.Get("/:type(issues|pulls)", user.Issues)
 			m.Get("/members", org.Members)
 			m.Get("/members/action/:action", org.MembersAction)
 
@@ -407,6 +406,7 @@ func runWeb(ctx *cli.Context) {
 			m.Group("/settings", func() {
 				m.Combo("").Get(org.Settings).
 					Post(bindIgnErr(auth.UpdateOrgSettingForm{}), org.SettingsPost)
+				m.Post("/avatar", binding.MultipartForm(auth.UploadAvatarForm{}), org.SettingsAvatar)
 
 				m.Group("/hooks", func() {
 					m.Get("", org.Webhooks)
@@ -513,19 +513,24 @@ func runWeb(ctx *cli.Context) {
 			m.Post("/edit/:tagname", bindIgnErr(auth.EditReleaseForm{}), repo.EditReleasePost)
 		}, reqRepoAdmin, middleware.RepoRef())
 
-		m.Combo("/compare/*").Get(repo.CompareAndPullRequest)
+		m.Combo("/compare/*").Get(repo.CompareAndPullRequest).
+			Post(bindIgnErr(auth.CreateIssueForm{}), repo.CompareAndPullRequestPost)
 	}, reqSignIn, middleware.RepoAssignment(true))
 
 	m.Group("/:username/:reponame", func() {
 		m.Get("/releases", middleware.RepoRef(), repo.Releases)
-		m.Get("/issues", repo.RetrieveLabels, repo.Issues)
-		m.Get("/issues/:index", repo.ViewIssue)
+		m.Get("/:type(issues|pulls)", repo.RetrieveLabels, repo.Issues)
+		m.Get("/:type(issues|pulls)/:index", repo.ViewIssue)
 		m.Get("/labels/", repo.RetrieveLabels, repo.Labels)
 		m.Get("/milestones", repo.Milestones)
-		m.Get("/pulls", repo.Pulls)
 		m.Get("/branches", repo.Branches)
 		m.Get("/archive/*", repo.Download)
-		m.Get("/pulls2/", repo.PullRequest2)
+
+		m.Group("/pulls/:index", func() {
+			m.Get("/commits", repo.ViewPullCommits)
+			m.Get("/files", repo.ViewPullFiles)
+			m.Post("/merge", reqRepoAdmin, repo.MergePullRequest)
+		})
 
 		m.Group("", func() {
 			m.Get("/src/*", repo.Home)
@@ -540,7 +545,7 @@ func runWeb(ctx *cli.Context) {
 	m.Group("/:username", func() {
 		m.Group("/:reponame", func() {
 			m.Get("", repo.Home)
-			m.Get(".git", repo.Home)
+			m.Get("\\.git$", repo.Home)
 		}, ignSignIn, middleware.RepoAssignment(true, true), middleware.RepoRef())
 
 		m.Group("/:reponame", func() {
