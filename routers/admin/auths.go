@@ -34,14 +34,33 @@ func Authentications(ctx *middleware.Context) {
 		ctx.Handle(500, "GetAuths", err)
 		return
 	}
+
+	ctx.Data["Total"] = models.CountLoginSources()
 	ctx.HTML(200, AUTHS)
+}
+
+type AuthSource struct {
+	Name string
+	Type models.LoginType
+}
+
+var authSources = []AuthSource{
+	{models.LoginNames[models.LDAP], models.LDAP},
+	{models.LoginNames[models.DLDAP], models.DLDAP},
+	{models.LoginNames[models.SMTP], models.SMTP},
+	{models.LoginNames[models.PAM], models.PAM},
 }
 
 func NewAuthSource(ctx *middleware.Context) {
 	ctx.Data["Title"] = ctx.Tr("admin.auths.new")
 	ctx.Data["PageIsAdmin"] = true
 	ctx.Data["PageIsAdminAuthentications"] = true
-	ctx.Data["LoginTypes"] = models.LoginTypes
+
+	ctx.Data["type"] = models.LDAP
+	ctx.Data["CurTypeName"] = models.LoginNames[models.LDAP]
+	ctx.Data["smtp_auth"] = "PLAIN"
+	ctx.Data["is_active"] = true
+	ctx.Data["AuthSources"] = authSources
 	ctx.Data["SMTPAuths"] = models.SMTPAuths
 	ctx.HTML(200, AUTH_NEW)
 }
@@ -50,7 +69,9 @@ func NewAuthSourcePost(ctx *middleware.Context, form auth.AuthenticationForm) {
 	ctx.Data["Title"] = ctx.Tr("admin.auths.new")
 	ctx.Data["PageIsAdmin"] = true
 	ctx.Data["PageIsAdminAuthentications"] = true
-	ctx.Data["LoginTypes"] = models.LoginTypes
+
+	ctx.Data["CurTypeName"] = models.LoginNames[models.LoginType(form.Type)]
+	ctx.Data["AuthSources"] = authSources
 	ctx.Data["SMTPAuths"] = models.SMTPAuths
 
 	if ctx.HasError() {
@@ -60,7 +81,7 @@ func NewAuthSourcePost(ctx *middleware.Context, form auth.AuthenticationForm) {
 
 	var u core.Conversion
 	switch models.LoginType(form.Type) {
-	case models.LDAP:
+	case models.LDAP, models.DLDAP:
 		u = &models.LDAPConfig{
 			Ldapsource: ldap.Ldapsource{
 				Name:             form.Name,
@@ -68,13 +89,14 @@ func NewAuthSourcePost(ctx *middleware.Context, form auth.AuthenticationForm) {
 				Port:             form.Port,
 				UseSSL:           form.UseSSL,
 				BindDN:           form.BindDN,
+				UserDN:           form.UserDN,
 				BindPassword:     form.BindPassword,
 				UserBase:         form.UserBase,
-				Filter:           form.Filter,
-				AdminFilter:      form.AdminFilter,
 				AttributeName:    form.AttributeName,
 				AttributeSurname: form.AttributeSurname,
 				AttributeMail:    form.AttributeMail,
+				Filter:           form.Filter,
+				AdminFilter:      form.AdminFilter,
 				Enabled:          true,
 			},
 		}
@@ -98,7 +120,7 @@ func NewAuthSourcePost(ctx *middleware.Context, form auth.AuthenticationForm) {
 	var source = &models.LoginSource{
 		Type:              models.LoginType(form.Type),
 		Name:              form.Name,
-		IsActived:         true,
+		IsActived:         form.IsActive,
 		AllowAutoRegister: form.AllowAutoRegister,
 		Cfg:               u,
 	}
@@ -116,7 +138,7 @@ func EditAuthSource(ctx *middleware.Context) {
 	ctx.Data["Title"] = ctx.Tr("admin.auths.edit")
 	ctx.Data["PageIsAdmin"] = true
 	ctx.Data["PageIsAdminAuthentications"] = true
-	ctx.Data["LoginTypes"] = models.LoginTypes
+	// ctx.Data["LoginTypes"] = models.LoginTypes
 	ctx.Data["SMTPAuths"] = models.SMTPAuths
 
 	id := com.StrTo(ctx.Params(":authid")).MustInt64()
@@ -138,7 +160,7 @@ func EditAuthSourcePost(ctx *middleware.Context, form auth.AuthenticationForm) {
 	ctx.Data["PageIsAdmin"] = true
 	ctx.Data["PageIsAdminAuthentications"] = true
 	ctx.Data["PageIsAuths"] = true
-	ctx.Data["LoginTypes"] = models.LoginTypes
+	// ctx.Data["LoginTypes"] = models.LoginTypes
 	ctx.Data["SMTPAuths"] = models.SMTPAuths
 
 	if ctx.HasError() {
@@ -149,6 +171,8 @@ func EditAuthSourcePost(ctx *middleware.Context, form auth.AuthenticationForm) {
 	var config core.Conversion
 	switch models.LoginType(form.Type) {
 	case models.LDAP:
+		fallthrough
+	case models.DLDAP:
 		config = &models.LDAPConfig{
 			Ldapsource: ldap.Ldapsource{
 				Name:             form.Name,
@@ -156,6 +180,7 @@ func EditAuthSourcePost(ctx *middleware.Context, form auth.AuthenticationForm) {
 				Port:             form.Port,
 				UseSSL:           form.UseSSL,
 				BindDN:           form.BindDN,
+				UserDN:           form.UserDN,
 				BindPassword:     form.BindPassword,
 				UserBase:         form.UserBase,
 				AttributeName:    form.AttributeName,
@@ -186,7 +211,7 @@ func EditAuthSourcePost(ctx *middleware.Context, form auth.AuthenticationForm) {
 	u := models.LoginSource{
 		ID:                form.ID,
 		Name:              form.Name,
-		IsActived:         form.IsActived,
+		IsActived:         form.IsActive,
 		Type:              models.LoginType(form.Type),
 		AllowAutoRegister: form.AllowAutoRegister,
 		Cfg:               config,
