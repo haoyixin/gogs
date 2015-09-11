@@ -630,7 +630,7 @@ func initRepository(e Engine, repoPath string, u *User, repo *Repository, opts C
 	}
 
 	tmpDir := filepath.Join(os.TempDir(), "gogs-"+repo.Name+"-"+com.ToStr(time.Now().Nanosecond()))
-	fmt.Println(tmpDir)
+
 	// Initialize repository according to user's choice.
 	if opts.AutoInit {
 		os.MkdirAll(tmpDir, os.ModePerm)
@@ -1231,7 +1231,7 @@ func SearchRepositoryByName(opt SearchOption) (repos []*Repository, err error) {
 		sess.Where("owner_id=?", opt.Uid)
 	}
 	if !opt.Private {
-		sess.And("is_private=false")
+		sess.And("is_private=?", false)
 	}
 	sess.And("lower_name like ?", "%"+opt.Keyword+"%").Find(&repos)
 	return repos, err
@@ -1658,7 +1658,7 @@ func NotifyWatchers(act *Action) error {
 
 type Star struct {
 	ID     int64 `xorm:"pk autoincr"`
-	UID    int64 `xorm:"uid UNIQUE(s)"`
+	UID    int64 `xorm:"UNIQUE(s)"`
 	RepoID int64 `xorm:"UNIQUE(s)"`
 }
 
